@@ -1,0 +1,56 @@
+---
+layout: default
+---
+<div class="subnav-helper">
+</div>
+
+<div class="subnav">
+    <div class="head">
+        <h2>DIPs</h2>
+        <p class="subnav-duplicate"><a href="../spec/spec.html">table of contents</a>
+        </p>
+    </div>
+
+    <ul>
+{% assign pages = site.pages | sort:"nr"  %}
+ {% for page in pages %}
+    {% if page.layout == "dip" %}
+        <li>
+			<a href='{{ page.url }}'>DIP {{page.nr}}</a>
+        </li>
+  {% endif %}
+  {% endfor %}
+    </ul>
+</div>
+
+<div class="hyphenate" id="content">
+    <div id="tools">
+        <div>
+            <div class="tip smallprint">
+                <a href="https://github.com/wilzbach/d-dip/issues">Report a bug</a>
+
+                <div>
+                    If you spot a problem with this page, click here to create a Bugzilla issue.
+                </div>
+            </div>
+
+
+            <div class="tip smallprint">
+				<a href="https://github.com/wilzbach/d-dip/issues/edit/gh-pages/{{page.path}}">Improve this page</a>
+
+                <div>
+                    Quickly fork, edit online, and submit a pull request for this page. Requires a signed-in GitHub account. This works well for small changes. If you'd like to make larger changes you may want to consider using a local clone.
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <h1>{{page.title}}</h1>
+
+	{{ content }}
+
+    <div class="smallprint" id="copyright">
+		Page generated on {{ site.time | date: '%B %d, %Y %H:%M:%S' }}
+    </div>
+</div>

@@ -1,0 +1,11 @@
+# Site settings
+title: D DIPs
+email: your-email@domain.com
+description: >
+  D DIPs ...
+baseurl: ""
+url: "http://yourdomain.com"
+github_username: dlang
+
+# Build settings
+markdown: kramdown
