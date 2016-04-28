@@ -1,0 +1,84 @@
+{| class="wikitable"
+!Title:	
+!'''Import path binding in source code'''
+|-
+|DIP:	
+|14
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2011-10-18
+|-
+|Last Modified:
+|2011-10-18
+|-
+|Author:
+|Martin Nowak
+|-
+|Links:
+|[http://prowiki.org/wiki4d/wiki.cgi?LanguageDevel/DIPs/DIP11 Split of from DIP11]
+|}
+
+== Abstract ==
+Prov ide a language construct to declare import paths in source files.
+
+== Rationale ==
+Declaring the location of dependencies should be done at the place where the dependency occurs. This reduces redundancy and maintenance effort. This is a requirement for [DIP11].
+
+== Description ==
+The specification for ImportDeclaration is extended as follows.
+
+    ModuleFullyQualifiedName:
+        Identifier
+        Expression of type String
+
+== Usage ==
+
+    module foo;
+    import "/path/bar.d";
+    import bar2="/path/bar2.d";
+    import "/path/bar3.d" : bar3fun;
+    
+    void main()
+    {
+        auto a = barfun();
+        auto b = bar2fun();
+        auto c = bar3fun();
+    }
+
+This will not add a symbol bar to the current scope.
+	
+    import "/path/bar.d"
+
+An alternative would be to only allow alias imports.
+
+== Impact ==
+Allowing an expression as module name does conflict with import bindings and alias imports.
+
+    @property string bar()
+    {
+        return "/path/to/bar.d";
+    }
+    import bar;        // currently is an error due to name collision
+    static import bar; // ditto
+    import bar : fun;  // this would change it's behavior and evaluate bar
+    import baz = bar;  // ditto
+
+== Alternatives ==
+It was proposed in [DIP11] to add a new pragma(importpath, "ImportSpec") with the same rules as giving a command line import path.
+
+This has two drawbacks. First one would need to statements to import a module.
+	
+    pragma(importpath, "/path/to");
+    import bar;
+
+Second using a pragma needs scoping rules. It was proposed that pragma(importpath) only be valid for that particular module. This has maintenance issues as every import from that path and the imported source themselves need to be kept in sync. One would need additional means to selectively transfer the import path to other modules.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+[[Category: DIP]]

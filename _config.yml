@@ -3,7 +3,7 @@ title: D DIPs
 email: your-email@domain.com
 description: >
   D DIPs ...
-baseurl: ""
+baseurl: "/d-dip"
 url: "http://yourdomain.com"
 github_username: dlang
 

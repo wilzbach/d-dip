@@ -1,0 +1,373 @@
+
+{| class="wikitable"
+!Title:
+!'''(Multiple) alias this'''
+|-
+|DIP:
+|66
+|-
+|Version:
+|1.2
+|-
+|Status:
+|Approved contingent to [http://forum.dlang.org/post/m74pg8$gl4$1@digitalmars.com these amendments]
+|-
+|Created:
+|2014-10-09
+|-
+|Last Modified:
+|2014-11-2
+|-
+|Author:
+|Igor Stepanov
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+
+An ''AliasThis'' declaration names a member to subtype.  Multiple ''AliasThis'' declarations are allowed.  Order of ''AliasThis'' declarations does not matter.
+
+==Description==
+
+In the code below...
+<syntaxhighlight lang=D>
+    struct Foo
+    {
+        //...
+        alias symbol this;
+    }
+</syntaxhighlight>
+... the construction <code>alias ''symbol'' this;</code> means that wherever <code>typeof(Foo.symbol)</code> is needed, <code>obj</code> (object of type <code>Foo</code>) can be substituted with <code>obj.symbol</code>. Effectively the construct declares <code>typeof(Foo.symbol)</code> as a supertype of <code>Foo</code>, with the implicit conversion dictated by <code>obj.symbol</code> (which may be a <code>static</code> member variable, a direct member variable, or a method).
+ 
+This rule applies in all instances where subtyping applies: implicit and explicit conversion, <code>.member</code> access expression, operator overloading, foreach expressions (<code>foreach(args; ''obj'')</code>) etc.
+<code>''symbol''</code> can be an any symbol when <code>obj.symbol</code> is a valid expression.
+
+If more than one <code>alias this</code> can be used to solve the same lookup,  an error is raised during compilation.
+
+<syntaxhighlight lang=D>
+    struct A
+    {
+        int i;
+        alias i this;
+    }
+
+    struct B
+    {
+        int i;
+        alias i this;
+    }
+
+    struct C
+    {
+        A a;
+        B b;
+
+        alias a this;
+        alias b this;
+    }
+    
+    void test()
+    {
+        C c;
+        int i = c; //Error: c.a.i vs c.b.i
+    }
+    
+    static assert(is(C : int)); //Error: c.a.i vs c.b.i
+</syntaxhighlight>
+
+===<code>alias this</code> and l-values===
+
+As mentioned above, the <code>alias this</code> symbol may be a field (which is an l-value) or method (which may be an r-value).
+Subtyped <code>struct</code> values may be passed to a function as a <code>ref</code> and used as an l-value if its alias this symbol is l-value.
+When the called function is overloaded and may take r-value and l-value argument, the l-value is preferred if alias this symbol is an l-value.
+
+<syntaxhighlight lang=D>
+    struct A
+    {
+        int a;
+        alias a this;
+    }
+
+    struct B
+    {
+        int foo() { return 1; };
+        alias foo this;
+    }
+
+    int testX(ref int x)
+    {
+        return 1;
+    }
+
+    int testX(int x)
+    {
+        return 2;
+    }
+
+    void test()
+    {
+        A a;
+        B b;
+        assert(testX(a) == 1); //a.a is l-value
+        assert(testX(b) == 2); //b.foo is r-value
+    }
+</syntaxhighlight>
+
+However, when type <code>D</code> can be converted to <code>B</code> through several paths and one yields an l-value whereas the other yields an r-value, the code is in error regardless of context. Example:
+
+<syntaxhighlight lang=D>
+    struct A
+    {
+        int a;
+        alias a this;
+    }
+
+    struct B
+    {
+        int foo() { return 1; };
+        alias foo this;
+    }
+
+    struct C
+    {
+        A a;
+        B b;
+        alias a this;
+        alias b this;
+    }
+
+    int testX(ref int x)
+    {
+        return 1;
+    }
+
+    void test()
+    {
+        C c;
+        testX(c); //Error: multiple ways to convert C to int: C.a.a and C.b.foo
+    }
+</syntaxhighlight>
+
+This is done because <code>alias this</code> provides subtyping and <code>A </code>and <code>B</code> have the same subtype: <code>int</code>. L-value modifier is not a part of type and statement "<code>A</code> is a subtype of l-value <code>int</code>" doesn't make sense. "<code>A</code> is a subtype of <code>int</code>" is correct assertion.
+
+===Method overloading===
+
+There are two important cases of overloading: <code>foo(X)</code> tries to overload base type <code>foo(Y)</code> and <code>basetype2.foo(X)</code> tries to overload <code>basetype2.foo(Y)</code>.
+
+At the first case semantic rule says: "Derived type methods hide base type methods."
+
+<syntaxhighlight lang=D>
+    struct A
+    {
+        int foo(int) { return 1; }
+        int foo(string) { return 1; }
+    }
+
+    struct B
+    {
+        int foo(double) { return 3; };
+        A a;
+        alias a this;
+    }
+
+    void test()
+    {
+        B b;
+        b.foo(2.0);      //Ok, call B.foo(double);
+        b.foo(2);        //Ok, call B.foo(double); A.foo(int) is hidden
+        b.foo("string"); //Error, unable to convert string to double. A.foo(string) is hidden
+    }
+</syntaxhighlight>
+
+The semantic rule for the second cast prescribes: "When parameter set can be applied only to one base type overloaded method, compiler will choose it. However, if parameter set can be applied to several base type overloaded methods (even if one matching is better than others), compiler should raise an error."
+
+<syntaxhighlight lang=D>
+    struct A
+    {
+        char foo(int)
+        {
+            return 'I';
+        }
+    }
+
+    struct B
+    {
+        char foo(string)
+        {
+            return 'S';
+        }
+
+        double foo(double)
+        {
+            return 'D';
+        }
+    }
+
+    struct C
+    {
+        A a;
+        B b;
+        alias a this;
+        alias b this;
+    }
+
+    void test()
+    {
+        C c;
+        assert(c.foo("string") == 'S'); //Ok. Only c.b.foo(string) is matching.
+        assert(c.foo(1.2) == 'D');      //Ok. Only c.b.foo(double) is matching.
+        c.foo(1);                       //Error: there are two base methods may be used: c.b.foo(double) and c.a.foo(int)
+                                        //No matter that c.a.foo(int) is matches better.
+    }
+</syntaxhighlight>
+
+==Resolution Algorithm==
+
+Multiple <code>alias this</code> can cause conflicts. This section explains how the compiler should resolve them.
+At the ''AliasThis'' declaration semantic stage, the compiler can perform the initial checks and reject the obviously incorrect ''AliasThis'' declarations.
+
+<syntaxhighlight lang=D>
+    struct Test1
+    {
+        int a;
+        int b;
+        alias a this;
+        alias b this; // Error: alias b this conflicts with alias a this;
+    }
+
+    class Test2a
+    {
+    }
+
+    class Test2b : Test2a
+    {
+    }
+
+    class Test2 : Test2b
+    {
+        Test2a a;
+        alias a this; //Error: alias a this tries to hide inherited type Test2a; 
+    }
+</syntaxhighlight>
+
+The other checks will be done when <code>alias this</code> is needed for typing expressions.
+When the compiler types an expression such as <code>fun(a)</code>, it can resolve it as <code>fun(a.aliasThisSymbol)</code>.
+(Hereinafter <code>fun(a)</code> means any case when <code>alias this</code> can be used: type conversion, <code>.member</code> expression, operator expression etc.)
+However compiler will try <code>fun(a.aliasThisSymbol)</code> only if the expression cannot be typed otherwise.
+
+More precisely, this is the order in which <code>obj.xyz</code> is looked up:
+
+# If xyz is a symbol (member, method, enum etc) defined inside typeof(obj) then lookup is done.
+# Otherwise, if xyz is a symbol introduced in the base class (where applicable), then lookup is done.
+# Otherwise, if xyz is found at least via either an opDispatch!"xyz" or alias this conversion, then lookup is done.
+# Otherwise an UFCS rewrite is effected.
+
+When the compiler is trying to resolve <code>alias this</code> it iterates all <code>alias this</code> declarations and tries to apply each. For each successful application, the compiler adds the result expression into the result set. If application fails, the compiler tries to recursively resolve the <code>alias this</code> expression. Also, if our type is a <code>class</code>, compiler tries to recursively resolve all inherited types.
+Finally, if resultSet contains only one candidate, the compiler will accept it. 
+Otherwice, if resultSet is empty, compiler tries another ways to resolve ex(obj): UFCS et c.
+Otherwice, if resultSet contains more then one candidates, the compiler raises an error.
+
+Recursive <code>alias this</code> may occur:
+
+<syntaxhighlight lang=D>
+    class A
+    {
+        C c;
+        alias c this;
+    }
+
+    class B
+    {
+        A a;
+        alias a this;
+    }
+
+    class C
+    {
+        B b;
+        alias b this;
+    }
+</syntaxhighlight>
+
+
+For resolving this situation, the resolveAliasThis function stores a set of types (<code>visitedTypes</code>), which can be visited higher in the call stack. If visitedTypes contains <code>typeof(obj)</code>, compiler will not check <code>obj</code>'s subtypes.
+
+When compiler resolves binary expressions, where both arguments have a alias this declarations, compiler proceeds as follows:
+At the first stage compiler tries to resolve <code>alias this</code> only for one term:
+<code>binex(a, b) -> binex(a.aliasthis, b)</code>
+<code>binex(a, b) -> binex(a, b.aliasthis)</code>
+
+If there is only one candidate, compiler chooses it, if there are many candidates, compiler raises an error.
+If there isn't candidates, compiler tries to resolve both terms:
+binex(a, b) -> binex(a.aliasthis, b.aliasthis)
+If there is only one candidate, compiler chooses it. If there are several candidates, compiler raises an error.
+
+==Limitations==
+If type T has <code>alias this</code> declarations and <code>opDispatch</code> declarations at the same time, a compile time error will be raised.
+Type shouldn't have <code>alias this</code> and <code>opDispatch</code> both.
+This rule may be relaxed in future, but now it is the simplest way to avoid symbol hijacking between different sybtyping methods.
+
+Now sybtyping via inheritance has a much high priority then sybtyping via <code>alias this</code>. Thus base (inherited) type I can hijack symbol from derived type D, if D uses both <code>alias this</code> and inheritance sybtyping:
+
+<syntaxhighlight lang=D>
+    class I
+    {
+        
+    }
+
+    struct A
+    {
+        void foo()
+        {
+            writeln("A");
+        }
+    }
+
+    class D : I
+    {
+        A a;
+        alias a this;
+    }
+
+    void main()
+    {
+        (new D).foo(); //prints "A"
+    }
+</syntaxhighlight>
+
+Now if we add <code>foo</code>  method to <code>class I</code>, <code>foo</code> will be hijacked:
+
+<syntaxhighlight lang=D>
+    class I
+    {
+        void foo()
+        {
+            writeln("I");
+        }   
+    }
+
+    struct A
+    {
+        void foo()
+        {
+            writeln("A");
+        }
+    }
+
+    class D : I
+    {
+        A a;
+        alias a this;
+    }
+
+    void main()
+    {
+        (new D).foo(); //prints "I"
+    }
+</syntaxhighlight>
+
+At the first look, it would be fine to disallow this case and raise an error if there are conflict between inherited and "alias this"-ed symbols.
+However, this change will break a lot of user code (simple alias this is present in the language for a long time) and resolving of this situation should be deferred to another DIP.
+[[Category: DIP]]

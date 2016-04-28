@@ -1,0 +1,392 @@
+{| class="wikitable"
+!Title:
+!'''Define qualified postblit'''
+|-
+|DIP:
+|49
+|-
+|Version:
+|2
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-11-10
+|-
+|Last Modified:
+|2013-12-17
+|-
+|Author:
+|Hara Kenji
+|-
+|Links:
+|[http://forum.dlang.org/post/mailman.326.1384066006.9546.digitalmars-d@puremagic.com Related forum discussion]
+|}
+
+== Abstract ==
+
+This DIP resolves the postblit design issues.
+
+== Motivation ==
+
+Plain old postblit concept has an issue that postblits does nothing for the type qualifiers reinterpretation of the object indirections. For example:
+
+ struct X {
+     int[] arr;
+     this(this) {}
+ }
+
+If you want to copy mutable X to immutable, compiler automatically memcpy the object image before the postblit call. But the user-defined postblit does nothing for the 'arr' field. So, the int[] arr will be interpreted to immutable(int[]) by copy.
+
+ int[] arr = [1,2,3];
+ X m = X(arr);
+ immutable X i = m;  // IF this copy invoke X.this(this)
+ static assert(is(typeof(i.arr) == immutable));
+ assert(i.arr == [1,2,3]);
+ arr[] = 100;
+ assert(i.arr == [1,2,3]);  // fails!
+
+Qualified postblits should provide ways to handle such reinterpretation.
+
+== Description ==
+
+In the ideal world, objects would have only one of the two qualifiers - mutable or <code>immutable</code>.
+So, mutable postblit (supports mutable to mutable copy), and immutable postblit (supports immutable to immutable copy) are necessary at least.
+
+However, in actual D code, there are two wildcard qualifiers, <code>const</code> and <code>inout</code>.
+Therefore, we should have ways copying an object which the original qualifier is unknown.
+And, we would also need a way to copy objects to distinct qualifiers (mutable to immutable, etc).
+For those requests, this DIP will provide additional two concepts, inout postblit and const postblit.
+
+=== Mutable Postblit ===
+
+If a postblit is unqalified, it will be used for the copy from mutable source to mutable destination.
+
+ struct S {
+     int num;
+     int[] arr;
+     <strong>this(this)</strong> {
+         static assert(typeof(this.num) == int);
+         static assert(typeof(this.arr) == int[]);
+ 
+         num = 1;
+         // value fields can be initialized again
+ 
+         arr[] += 1;  // OK
+     }
+ }
+
+Modifying indirections via mutable fields is allowed. The indirections may be shared with original objects, so mutable postblit may rewrite the representation of the source object.
+
+ S sm1 = S(1, [1,2,3]);
+ S sm2 = sm1;  // mutable postblit is called
+ assert(sm2.marr == [2,3,4]);
+ assert(sm1.marr == [2,3,4]); // modified
+ assert(sm1.arr.ptr == sm2.arr.ptr);
+
+=== Immutable Postblit ===
+
+If a postblit is qalified with <code>immutable</code>, it will be used for the copy from immutable source to immutable destination.
+
+ struct S {
+     int num;
+     int[] arr;
+     <strong>this(this) immutable</strong> {
+         static assert(typeof(this.num) == immutable int);
+         static assert(typeof(this.arr) == immutable int[]);
+ 
+         num = 1;
+         // value fields can be initialized again
+ 
+         //arr[] += 1;
+         // cannot modify immutable data
+ 
+         arr = this.arr.idup;
+         // reference field rebinding is allowed
+     }
+ }
+
+Of course, you cannot modify indirections during postblitting, because they are qualified with immutable.
+
+=== Inout Postblit ===
+
+If a postblit is qalified with <code>inout</code>, it is used for the copy when source and destination have same qualifier.
+
+ struct S {
+     int num;
+     int[] marr;
+     const int[] carr;
+     immutable int[] iarr;
+ 
+     static int[] gmarr;
+     static immutable int[] giarr;
+ 
+     <strong>this(this) inout</strong> {
+         num = 1;
+         // value fields can be initialized again
+ 
+         //marr[] += 1;
+         // cannot modify indirections, because at least they are qualified with inout
+         static assert(is(typeof(marr) == inout int[]));
+         // you can keep reference fields as-is.
+ 
+         //carr = garr;
+         // initializing const refereneces by mutable/const data is disallowed. Instead
+         carr = garr.dup;  // initialize by unique expression.
+         carr = giarr;     // or by immutable data.
+ 
+         iarr = giarr;
+         // initializing immutable reference by immutable data is allowed.
+     }
+ }
+
+If inout postblit does nothing for reference fields, the source and destination may share indirections.
+
+ struct S {
+     int[] arr;
+     this(this) inout {
+         // do nothing for this.arr
+     }
+ }
+ void main() {
+     S s1 = S([1,2,3]);
+     S s2 = s1;  // inout postblit is called
+     assert(s1.arr.ptr == s2.arr.ptr);
+     s1.arr[] = 10;
+     assert(s2.arr == [10, 10, 10]);
+ }
+
+=== Const Postblit ===
+
+If a postblit is qualified with <code>const</code>, it will be used to make arbitrary qualified copy from arbitrary qualified source.
+
+Mutable and immutable postblit will extend the plain old postblit definition naturally,
+by adding a perspective about qualifier conversion in there.
+However it is still insufficient for the copy operations of between incompatible qualifiers
+(eg. mutable to immutable, const to mutable, etc).
+
+If a postblit call can guarantee that the copied object owns no reference to the external state,
+the object may be convertible to arbitrary qualifier.
+In other words, the postblit would have an ability to construct "unique" copy from arbitrary qualified source object.
+
+So, it could also be called "unique postblit", based on the concept.
+
+Inside const postblit, compiler will enforce following rule:
+- all of non-immutable indirections must be re-initialized by Unique Expressions.
+
+ struct S {
+     int num;
+     int[] arr;
+     <strong>this(this) const</strong> {
+         num = 1;
+         // value fields can be initialized again
+ 
+         //arr = arr;
+         // rhs is not an unique expression, so compiler will reject this initialization.
+ 
+         // also forbidden to do nothing for the arr field
+ 
+         arr = arr.dup;
+         // arr.dup makes unique expression, so compiler accepts this line.
+     }
+ }
+
+==== The definition of ''Unique Expressions'' ====
+
+# Basic literal values (integers, complexes, characters)
+# Complex literal values (struct literals, array literals, AA literals)
+#: If the literal has subsequent elements, the sub expressions should also be unique.
+# Expressions that has no indirections
+#: For example, multiply integers returns rvalue integer, and integer has no indirections, so multiply expression will be unique.
+#: <code>int a, b, c = a * b;  // the multiply will become unique expression</code>
+# An unique object constructed by const constructor
+# An unique object constructed by const postblit
+# A field variable of unique object
+#: <code>unique_obj.var</code> is also unique.
+# An address of unique object
+#: <code>&unique_obj</code> is also unique.
+# A copy of an array
+#: iff the element type supports generating unique copy.
+#* <code>unique_array[n]</code>
+#* <code>unique_array[n .. m]</code>
+# An element(s) of unique array
+#* <code>unique_array[n]</code>
+#* <code>unique_array[n .. m]</code>
+# Concatenation of arrays
+#: By definition, concat expression will always create a newly allocated array. So iff the element type has no reference, the result will be unique.
+# Pure function call which returns unique object
+# New expression with unique arguments
+#: If a struct type is new-ed with literal syntax, same as "literal values" case.
+#: If a class type is new-ed, the called constructor should be const constructor.
+
+(maybe this list is not complete)
+
+=== Overloading of qualified postblits ===
+
+If mutable postblit is defined, it is alwasy used for the copies:
+* mutable to mutable
+* mutable to const
+  Note that: Different from the previous version of this DIP, mutable postblit is always used for mutable to const copy.
+
+If immutable postblit is defined, it is alwasy used for the copies:
+* immutable to const
+* immutable to immutable
+  Note that: Different from the previous version of this DIP, immutable postblit is always used for immutable to const copy.
+
+If inout postblit is defined,
+* if mutable postblit is not defined, it will be used for the copies:
+** mutable to mutable
+** mutable to const
+* if immutable postblit is not defined, it will be used for the copies:
+** immutable to const
+** immutable to immutable
+* it is always used for other copies that qualifier transition is equal or weaken
+** const to const
+** inout to inout
+** inout to const
+
+If const postblit is defined,
+* it is always used for copies between incompatible qualifiers:
+** mutable to immutable
+** const to mutable
+** const to immutable
+** immutable to mutable
+** inout to mutable
+** inout to immutable
+* if other postblits are not defined, can cover corresponding copy directions.
+** mutable to mutable
+** mutable to const
+** const to const
+** immutable to const
+** immutable to immutable
+** inout to inout
+** inout to const
+
+These priority order is defined based on the following rule:
+# If source is mutable or immutable, most specialized postblits (mutable/immutable postblit) will be  used, if they exists.
+# If inout postblit exists and applicable, it is used.
+# If const postblit exists, it is used.
+# Otherwise, "cannot copy" error will occur.
+
+== Concatenation of field postblits ==
+
+If a struct has a field which has postblit, compiler will generate postblit implicitly for the enclosing struct.
+
+ struct A {
+     this(this);
+ }
+ struct S1 {
+     A a;
+     // Compiler will generate this(this); implicitly
+ }
+
+If struct fields have incompatible postblits, compiler implicitly mark the enclosing struct uncopyable.
+
+ struct B {
+     this(this) immutable;
+ }
+ struct S2 {
+     immutable A a;
+     B b;
+     // a.this(this); is not callable for the copy from immutable A to immutable A.
+     // b.this(this) immutable is callable only for the copy from B to B
+     // Therefore compiler cannot generate appropriate postblit implicitly for S2.
+     // Then S2 will be marked as uncopyable.
+ }
+
+To make S2 copyable, you need to define postblit by hand.
+
+ struct S3 {
+     immutable A a;
+     B b;
+     this(this) { // or immutable or inout or const, as you needed
+         // When this postblit is invoked, Both a and b are immediately after the bitwise copy.
+         // So re-initializing both fields will be enforced by compiler.
+         a = immutable A();  // Re-initializing must be required
+         b = B();            // Re-initializing must be required
+     }
+ }
+
+Rules to generate combined postblit from struct fields:
+# If all of the fields have const postblits, the enclosing struct can generate const postblit automatically.
+# If all of the fields have inout postblits, the enclosing struct can generate inout postblit automatically.
+# If all of the fields have immutable postblits, the enclosing struct can generate immutable postblit automatically.
+# If all of the fields have postblits which support the copy between same qualifiers, the enclosing struct can generate mutable postblit automatically.
+
+== Fix for TypeInfo ==
+
+<code>TypeInfo.postblit(in void* p);</code> is invoked on array copy/concatenation by druntime. So it must support qualified postblits.
+For that, following change is necessary.
+
+If a struct S exists:
+
+* <code>typeid(S).postblit(&obj)</code> will call "mutable postblit"
+* <code>typeid(immutable S).postblit(&obj)</code> will call "immutable postblit"
+* <code>typeid(inout S).postblit(&obj)</code> will call "inout postblit"
+* <code>typeid(const S).postblit(&obj)</code> will call "const postblit"
+
+If S does not support corresponding postblit, <code>TypeInfo.postblit</code> will throw <code>Error</code> in runtime.
+
+ struct S {
+     this(this) immutable;
+ }
+ 
+ // trying to invoke mutable postblit will throw Error
+ typeid(S).postblit(&obj);
+
+== Impact to the existing code ==
+
+Currently, if a struct has no indirection fields, the user-defined postblit will be invoked on incompatible qualifier copies unrelated to its qualifier.
+
+ struct S
+ {
+     int value;  // has no indirection
+     this(this) { printf("postblit\n"); }
+ }
+ void main()
+ {
+     S sm;
+     immutable S si;
+ 
+     S sm2 = si;            // invoke S.this(this)
+     immutable S si2 = sm;  // invoke S.this(this)
+ }
+
+But after qualified postblit introduced, it won't work anymore.
+To fix the issue, you need to change the postblit signature to <code>this(this) const</code>.
+
+Other changes will be '''undefined behavior''', because until now D language hadn't defined well about qualified postblits.
+
+== Why 'const' postblit will called to copy arbitrary qualified object? ==
+
+When an object is constructed by <code>const</code> postblit, the destination object would have either mutable or immutable qualifier.
+And, const method is always callable on both mutable and immutable object.
+
+ struct S {
+     this(this) const { ... }
+ }
+ void main() {
+     S sm;
+     immutable S si;
+ 
+     // const postblit is callable on constructing mutable object
+     S sm2 = sm;  //   mutable to mutable
+     S sm3 = si;  // immutable to mutable
+ 
+     // const postblit is callable on constructing mutable object
+     immutable S si2 = si;  // immutable to immutable
+     immutable S si3 = sm;  //   mutable to immutable
+ }
+
+There's no mutation against widely known "const method" concept.
+
+== Rationale ==
+
+See also [[DIP53]].
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

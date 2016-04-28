@@ -1,0 +1,363 @@
+{| class="wikitable"
+!Title:
+!'''Reference Counted Class Objects'''
+|-
+|DIP:
+|74
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2015-02-23
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Walter Bright and Andrei Alexandrescu
+|-
+|}
+
+== Abstract ==
+
+This DIP proposes <tt>@safe</tt> reference counted <tt>class</tt> objects (including exceptions) and <tt>interface</tt>s for D.
+
+== Description ==
+
+DIP25 allows defining <tt>struct</tt> types that own data and expose references to it, <tt>@safe</tt>ly, whilst controlling lifetime of that data. This proposal allows defining <tt>class</tt> objects that are safe yet use deterministic destruction for themselves and resources they own.
+
+The compiler detects automatically and treats specially all <tt>class</tt>es and <tt>interface</tt>s that define the following two methods:
+
+<syntaxhighlight lang=D>
+class Widget {
+    T1 opAddRef();
+    T2 opRelease();
+    ...
+}
+</syntaxhighlight>
+
+<tt>T1</tt> and <tt>T2</tt> may be any types (usually <tt>void</tt> or an integral type). The methods may or may not be <tt>final</tt>, virtual, or inherited from a supertype. Any attributes are allowed on these methods. (If practical, <tt>nothrow</tt> and <tt>final</tt> are suggested for performance.) They must be public. UFCS-expanded calls are not acceptable. If these two methods exist, the compiler categorizes this <tt>class</tt> or <tt>interface</tt> type as a ''reference counted object'' (RCO).
+
+== Rules == 
+
+=== General ===
+
+* <tt>@safe</tt> code may not issue explicit calls to <tt>opAddRef</tt>/<tt>opRelease</tt>.
+
+* Implicit conversion to supertypes (<tt>class</tt> or <tt>interface</tt>) is allowed ONLY if the supertype is also a reference counted type. It follows that reference counted types cannot be converted to <tt>Object</tt> (unless <tt>Object</tt> itself defines the two methods).
+
+* Method calls to supertypes are only allowed if the supertype that defines the method is also reference counted.
+
+* Explicit casting to or from <tt>void*</tt> does not entail a call to <tt>opAddRef</tt>.
+
+* Typechecking methods of reference counted types is done the same as for <tt>struct</tt>s. This is important because it limits what reference counted types can do. Consider:
+
+<syntaxhighlight lang=D>
+@safe class Widget1 {
+    private int data;
+    ref int getData() { return data; } // fine
+    ...
+}
+
+@safe class Widget2 {
+    private int data;
+    ref int getData1() { return data; } // ERROR
+    ref int getData2() return { return data; } // fine
+    ulong opAddRef();
+    ulong opRelease();
+    ...
+}
+</syntaxhighlight>
+
+This is because it is safe for a garbage collected object to escape references to its internal state. The same is not allowed for reference counted objects because they are expected to be deallocated in a deterministic manner (same as e.g. <tt>struct</tt> objects on the stack).
+
+=== Creating references ===
+
+* Whenever a new reference to an object is created (e.g. <tt>auto a = b;</tt>), compiler inserts a call to <tt>opAddRef</tt> in the generated code. Call is evaluated only if the reference is not <tt>null</tt>. The lowering of <tt>auto a = lvalExpr;</tt> to pre-DIP74 code is conceptually as follows:
+
+<syntaxhighlight lang=D>
+auto a = function(x) { if (x) x.opAddRef(); return x; }(lvalExpr);
+</syntaxhighlight>
+
+* If a new reference is created from an rvalue (including a call to <tt>new</tt> or the result of a function), no call to <tt>opAddRef</tt> is inserted. As a consequence, there is no call inserted for the first reference created via a constructor (i.e. it is assumed the constructor already puts the object in the appropriate state). For example the lowering of <tt>auto a = new Widget;</tt> does not insert a call to <tt>opAddRef</tt>.
+
+=== Assignment to existing references ===
+
+* Whenever a reference to an object is assigned (e.g. <tt>a = b</tt>), first <tt>b.opAddRef()</tt> is called and then <tt>a.opRelease()</tt> is called, followed by the reference assignment itself. Calls are only made if the respective objects are not <tt>null</tt>. So the lowering of e.g. <tt>lvalExprA = lvalExprB;</tt> to pre-DIP74 code is:
+
+<syntaxhighlight lang=D>
+function(ref x, y) { 
+    if (y) y.opAddRef();
+    scope(failure) if (y) y.opRelease();
+    if (x) x.opRelease();
+    x = y;
+}(lvalExprA, lvalExprB);
+</syntaxhighlight>
+
+The complexity of this code underlies the importance of making <tt>opAddRef</tt> and especially <tt>opRelease</tt> <tt>nothrow</tt>. In that case the <tt>scope(failure)</tt> statement may be elided.
+
+* Assigning an lvalue from an rvalue does not insert a call to <tt>opAddRef</tt>. It does insert a call to <tt>opRelease</tt> against the previous value of the reference. So the lowering of e.g. <tt>lvalExpr = rvalExpr;</tt> to pre-DIP74 code is:
+
+<syntaxhighlight lang=D>
+function(ref x, y) { 
+    if (x) x.opRelease();
+    x = y;
+}(lvalExpr, rvalExpr);
+</syntaxhighlight>
+
+=== Scope and Destructors ===
+
+* Whenever a reference to an object goes out of scope, the compiler inserts an implicit call to <tt>opRelease</tt>. Call is evaluated only if the reference is not <tt>null</tt>.
+
+* <tt>struct</tt>, <tt>class</tt>, and closure types that have RCO members accommodate calls to <tt>opRelease</tt> during their destruction. 
+
+=== Passing references by value into functions ===
+
+* The pass-by-value protocol for RCOs is as follows: the caller does NOT insert <tt>opAddRef</tt> for RCOs passed by value. (As one consequence, no <tt>opAddRef</tt> or <tt>opRelease</tt> calls are issued for the implicit <tt>this</tt> parameter.) This means the callee must assume it is working on references borrowed from the caller.
+
+* If the caller never assigns to a RCO parameter (i.e. it never inserts a call to <tt>opRelease</tt>), then there is no extra code generated related to parameter passing.
+
+* If the caller potentially assigns to an RCO parameter, it may need to insert additional calls to <tt>opAddRef</tt>/<tt>opRelease</tt> because it may borrow the same object through several parameters. Consider:
+
+<syntaxhighlight lang=D>
+void fun(Widget x, Widget y, bool c) {
+    if (c) x = null;
+    y.someMethod();
+}
+...
+auto w = new Widget;
+fun(w, w, true);
+</syntaxhighlight>
+
+In this case, <tt>fun</tt> borrows the same RCO twice, while it still has only one recorded reference (the one at birth). Therefore, unwittingly assigning to <tt>x</tt> (and inserting the appropriate <tt>x.opRelease</tt>) will result in the reference count going to zero (and the object getting potentially deallocated). Following that, the use of <tt>y</tt> will be incorrect.
+
+* Therefore, a function is allowed to conservatively insert a pair of <tt>opAddRef</tt>/<tt>opRelease</tt> calls to each RCO parameter. The lowering of <tt>fun</tt> to pre-DIP74 code might be:
+
+<syntaxhighlight lang=D>
+void fun(Widget x, Widget y, bool c) {
+    // BEGIN INSERTED CODE
+    if (x) x.opAddRef();
+    scope(exit) if (x) x.opRelease();
+    if (y) y.opAddRef();
+    scope(exit) if (y) y.opRelease();
+    // END INSERTED CODE
+    if (c) x = null;
+    y.someMethod();
+}
+...
+auto w = new Widget;
+fun(w, w, true);
+</syntaxhighlight>
+
+The two references don't have to be aliased for problematic cases to occur. A more subtle example involves borrowing two RCOs, one being a member of the other:
+
+<syntaxhighlight lang=D>
+class Gadget {
+    Gadget next;
+    ...
+    // RCO primitives
+    void opAddRef();
+    void opRelease();
+}
+void fun(Gadget x, Gadget y, bool c) {
+    if (c) x.next = null;
+    y.someMethod();
+}
+...
+auto m = new Gadget;
+m.next = new Gadget;
+fun(m, m.next, true);
+</syntaxhighlight>
+
+In the example above, the two <tt>Gadget</tt> objects created have reference count 1 upon entering <tt>fun</tt>. The conservatively generated (correct) code first raises both reference count to 2. Upon exiting <tt>fun</tt>, both reference counts are correctly restored to 1. A wrong code generation approach might free the <tt>m.next</tt> field, thus invalidating <tt>m</tt>.
+
+=== Functions returning references by value ===
+
+* A function that returns a local RCO calls neither <tt>opAddRef</tt> nor <tt>opRelease</tt> against that value. Example:
+
+<syntaxhighlight lang=D>
+Widget fun() {
+    auto a = new Widget;
+    return a; // no calls inserted
+}
+</syntaxhighlight>
+
+Note: this is not an optimization. The compiler does not have the discretion to insert additional <tt>opAddRef</tt>/<tt>opRelease</tt> calls.
+
+* A function that returns an RCO rvalue calls neither <tt>opAddRef</tt> nor <tt>opRelease</tt> against that value. Example:
+ 
+<syntaxhighlight lang=D>
+Widget fun() {
+    return new Widget; // no calls inserted
+}
+</syntaxhighlight>
+
+Note: this is not an optimization. The compiler does not have the discretion to insert additional <tt>opAddRef</tt>/<tt>opRelease</tt> calls.
+
+* Functions that return an RCO (other than the two cases above) call <tt>opAddRef</tt> against the returned reference. This includes globals, <tt>static</tt>s, and RCO parameters received either by value or by reference. Example:
+
+<syntaxhighlight lang=D>
+Widget fun(ref Widget a, Widget b, int c) {
+    if (c == 0)
+    {
+        static widget w;
+        if (!w) w = new Widget;
+        return w; // opAddRef inserted
+    }
+    if (c == 1) return a; // opAddRef inserted
+    return b; // opAddRef inserted
+}
+</syntaxhighlight>
+
+* As a litmus test, consider:
+
+<syntaxhighlight lang=D>
+Widget identity(Widget x) {
+    return x;
+}
+....
+auto a = new Widget; // reference count is 1
+a = a; // fine, call opAddRef then opRelease per assignment lowering
+a = identity(a); // fine, identity calls opAddRef and assignment calls opRelease
+</syntaxhighlight>
+
+===Optimizations===
+
+* The compiler considers that <tt>opRelease</tt> is the inverse of <tt>opAddRef</tt>, and therefore is at liberty to elide pairs of calls to <tt>opAddRef</tt>/<tt>opRelease</tt>. Example:
+
+<syntaxhighlight lang=D>
+Widget fun() {
+    auto a = new Widget;
+    auto b = a;
+    return b;
+}
+</syntaxhighlight>
+
+Applying the rules defined above would have <tt>fun</tt>'s lowering insert one call to <tt>opAddRef</tt> (for creating <tt>b</tt>) and one call to <tt>opRelease</tt> (when <tt>a</tt> goes out of scope). However, these calls may be elided.
+
+=Idioms and How-Tos=
+
+== Defining a non-copyable reference type ==
+
+Using <tt>@disable this(this);</tt> is a known idiom for creating <tt>struct</tt> objects that can be created and moved but not copied. The same is achievable with RCOs by means of <tt>@disable opAddRef();</tt> (the declaration must still be present in order for the type to qualify as RCO, and implemented if not <tt>final</tt>).
+
+== Defining a reference counted object with deallocation ==
+
+Classic reference counting techniques can be used with <tt>opAddRef</tt> and <tt>opRelease</tt>.
+
+<syntaxhighlight lang=D>
+class Widget {
+    private uint _refs = 1;
+    void opAddRef() {
+        ++_refs;
+    }
+    void opRelease() {
+        if (_refs > 1) {
+            --_refs;
+        } else {
+            this.destroy();
+            GC.free(cast(void*) this);
+        }
+    }
+   ...
+}
+</syntaxhighlight>
+
+Usually such approaches also use <tt>private</tt> constructors and object factories to ensure the same allocation method is used during creation and destruction of the object.
+
+If the object only needs to free <tt>this</tt> (and no other owned resources), the typechecking ensured by the compiler is enough to verify safety (however, <tt>@trusted</tt> needs to be applied to the call that frees <tt>this</tt>).
+
+==Defining a type that owns resources==
+
+RCOs that own references are defined similarly to <tt>struct</tt>s that own references. Attention must be paid to annotate all functions returning references to owned data with <tt>return</tt>.
+
+<syntaxhighlight lang=D>
+class Widget {
+    private uint _refs = 1;
+    private int[] _payload; // owned
+
+    ref int opIndex(size_t n) return { // mark this as a non-escape reference
+        return _payload[n];
+    }
+
+    void opAddRef() {
+        ++_refs;
+    }
+    void opRelease() {
+        if (_refs > 1) {
+            --_refs;
+        } else {
+            GC.free(_payload.ptr);
+            _payload = null;
+            this.destroy();
+            GC.free(cast(void*) this);
+        }
+    }
+   ...
+}
+</syntaxhighlight>
+
+=== Relinquishing an owned resource ===
+
+Consider that <tt>Widget</tt> in the example above wants to give away its <tt>_payload</tt> to user code. It can do so with a method that effects a destructive read:
+
+<syntaxhighlight lang=D>
+class Widget {
+    ...
+    int[] releasePayload() {
+        auto result = _payload;
+        _payload = null;
+        return result;
+    }
+}
+</syntaxhighlight>
+
+The method is correctly not annotated with <tt>return</tt> because the slice it returns is not scoped by <tt>this</tt>. Note that if the implementer of <tt>Widget</tt> forgets the assignment <tt>_payload = null</tt>, user code may end up with a dangling reference.
+
+==Defining a type that can be used both with RC and GC==
+
+The simplest way to define a type that works with both RC and GC (subject to e.g. a configuration option) is to simply always define <tt>opAddRef</tt> and <tt>opRelease</tt> and rig them to be no-op in the GC case. There are instances in which this approach is not desirable:
+
+* RCOs objects are subject to additional limitations compared to their GC counterparts:
+** No conversion to <tt>Object</tt> or <tt>interface</tt>s that are not reference counted
+** Cannot escape pointers and references to direct members in <tt>@safe</tt> code
+* If the stubbed <tt>opAddRef</tt> and <tt>opRelease</tt> are not <tt>final</tt>, efficiency may be a concern: the compiler may be unable to detect the functions do nothing and still insert virtual calls to them.
+
+Another possibility is to make RC vs. GC a policy choice instructing the class being defined:
+
+<syntaxhighlight lang=D>
+enum MMPolicy { GC, RC }
+
+class Widget(MMPolicy pol) {
+    static if (pol == MMPolicy.RC) {
+        void opAddRef() { ... }
+        void opRelease() { ... }
+    }
+    ...
+}
+</syntaxhighlight>
+
+Such a class may benefit of the full benefits of each policy, selectable by appropriate use of <tt>static if</tt>.
+
+Unittests should make sure that the class works as expected with both approaches.
+
+== Qualified Types ==
+
+TODO
+
+== Aftermath ==
+
+This DIP allows defining reference counted <tt>class</tt> objects that are usable in <tt>@safe</tt> code. However, it does not ''enforce'' safety.
+
+Explicitly freeing memory associated with an object remains the responsibility of the user. If the user decides to annotate calls such as <tt>free</tt> or <tt>GC.free</tt> etc. as <tt>@trusted</tt>, it is the user's responsibility to make sure the <tt>class</tt> was designed to insert <tt>return</tt> annotations for all references to owned objects made accessible by the class.
+
+In short, this DIP makes it ''possible'' to write <tt>@safe</tt> objects with deterministic memory deallocation, but does not ''enforce'' it.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

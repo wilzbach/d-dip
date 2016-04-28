@@ -1,0 +1,50 @@
+{| class="wikitable"
+!Title:	
+!'''Transparently substitute module with package'''
+|-
+|DIP:	
+|1
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2012-03-30
+|-
+|Last Modified:
+|2012-03-30
+|-
+|Author:
+|Andrei Alexandrescu
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+This proposal allows a module to be replaced with a package, without requiring changes to client code. It solves the problem of modules growing too large to be conveniently managed as one file, yet with an interface small enough. After the substitution users may continue using the same import statement to use the package, or may import only parts of it.
+
+== Rationale ==
+This is a "growing pains" kind of issue. Some modules in std (algorithm, datetime) have grown large, which makes it difficult to manage them as single files. Other libraries may be experiencing the same issue. This proposal allows breaking a module into a package without breaking client code that assumes the code is still in one module.
+
+== Description ==
+* If the compiler sees a request for importing "foo.bar" and "foo/bar" is a directory, then automatically look for the file "foo/bar/package.d". If both "foo/bar.d" and "foo/bar/" exists, compilation halts with an error.
+* ( One nice detail of the design is that "package" is a keyword so the file "foo/bar/package.d" cannot be imported otherwise by mistake, which improves the robustness of the scheme.
+* The file "foo/bar/package.d" will be processed like a normal import, except the file is not allowed to use the "module" declaration. Instead, the file is assumed to have a "module foo.bar" declaration, i.e. it is interpreted as if it were the module "foo.bar".
+* The file "foo/bar/package.d" will in all likelihood import whatever files in the package the developer decides.
+
+This proposal comes with an important lookup rules change. When looking up the symbol "foo.bar.baz", currently an exact match is needed. However. when looking up ".baz" or simply "baz", a flexible lookup is used that has many advantages (less verbose, hijacking detection etc). Therefore we think similar flexibility should be imparted to "foo.bar.baz", as follows:
+
+* If a qualified symbol "foo.bar.baz" appears in code, the compiler considers "foo.bar" a prefix that sets the starting point of the lookup, and then proceeds with looking up "baz" from that starting point. That means a program that imports std.algorithm may use "std.sort" for the symbol "std.algorithm.sort".
+* If more than one symbol is found, normal hijacking and collision rules apply.
+* This change in the lookup rule completes the proposal because it allows the code using "foo.bar.baz" to actually find "foo.bar.module13.baz", i.e. it supports transparently breaking modules into packages.
+
+== Usage ==
+No particular usage notes beyond the above.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+[[Category: DIP]]

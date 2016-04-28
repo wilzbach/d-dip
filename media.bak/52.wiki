@@ -1,0 +1,200 @@
+{| class="wikitable"
+!Title:
+!'''Implicit conversions'''
+|-
+|DIP:
+|52
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-12-11
+|-
+|Last Modified:
+|2013-12-15
+|-
+|Author:
+|Simen Kjærås
+|-
+|Links:
+|
+[http://forum.dlang.org/post/mailman.2632.1355345407.5162.digitalmars-d@puremagic.com Related forum discussion #1]
+
+[http://forum.dlang.org/post/jul0qv$2l9d$1@digitalmars.com Related forum discussion #2]
+
+[http://s3.amazonaws.com/dconf2007/WalterAndrei.pdf WalterAndrei.pdf - DConf 2007]
+|}
+
+== Abstract ==
+Implicit conversion to and from other types are useful, and is to some extent covered by existing language features. Some cases are currently not covered, but could be worthy additions to the toolbox.
+
+== Rationale ==
+While too much implicit conversion can be a bad thing, so can too little. Today, some forms of implicit conversion are only available to built-in types, and it would prove fruitful for user-defined types to to have the same abilities.
+
+In [http://s3.amazonaws.com/dconf2007/WalterAndrei.pdf WalterAndrei.pdf], pages 21-22, a mechanism for implicit casting ''to'' a specified type (<code>opImplicitCastTo</code>) as well as ''from'' a specified type (<code>opImplicitCastFrom</code>) is outlined.
+
+It can be argued that [http://dlang.org/declaration.html#AliasThisDeclaration alias this] provides the behavior of <code>opImplicitCastTo</code>, but there are some missing features that <code>opImplicitCastTo</code> could enable, and <code>opImplicitCastFrom</code> is simply not covered by the language today. 
+
+== Problem ==
+In a [http://forum.dlang.org/post/jul0qv$2l9d$1@digitalmars.com discussion] on the forum, it was pointed out that while this code works perfectly:
+
+<syntaxhighlight lang="d">
+Tuple!(int, int) foo() {
+    import std.typecons;
+    Tuple!(int, "x", int, "y") a;
+    return a;
+}
+</syntaxhighlight>
+
+The following does not:
+
+<syntaxhighlight lang="d">
+Tuple!(int, "x", int, "y") bar() {
+    import std.typecons;
+    Tuple!(int, int) a;
+    return a;
+}
+</syntaxhighlight>
+
+The problem here is one of specificity. In the first example, the conversion goes from a specialized type to a less specialized one, and so the specialized type can provide an alias this returning the less specialized type.
+
+However, given that this code compiles and works perfectly:
+
+<syntaxhighlight lang="d">
+void baz() {
+    import std.typecons;
+    Tuple!(int, int) a;
+    Tuple!(int, "x", int, "y") b;
+    a = b; // Implicit conversion to less specialized type.
+    b = a; // Implicit conversion to more specialized type.
+}
+</syntaxhighlight>
+
+It is clear that this limitation is not universal.
+
+== Solution ==
+
+I propose that the functionality of <code>opImplicitCastFrom</code> be added to the language in the following form:
+
+A static function by the name of <code>opImplicitCastFrom</code> may be added to aggregate types. Its return type must be the same as the enclosing type. It may be a function template.
+
+<syntaxhighlight lang="d">
+struct Foo {
+    int n;
+    static Foo opImplicitCastFrom(T)(T value) {
+        return Foo(value);
+    }
+}
+</syntaxhighlight>
+
+
+* When a value is returned from a function with a return type different from the returned value (e.g <code>Foo fun() { Bar bar; return bar; }</code>):
+** First attempt alias this.
+** If alias this fails, rewrite <code>return bar;</code> to return <code>Foo.opImplicitCastFrom(bar);</code>
+** If no match is found, give a compilation error.
+
+
+* When a value is attempted assigned to a variable of a type different from that of the value (e.g. <code>Foo foo; Bar bar; foo = bar;</code>):
+** First attempt opAssign.
+** If opAssign fails, rewrite <code>foo = bar;</code> to <code>foo = Foo.opImplicitCastFrom(bar);</code>
+** If no match is found, give a compilation error.
+
+
+* When a value is given as the sole argument to a constructor of a different type (e.g. <code>Bar bar; Foo foo = bar;</code>):
+** First attempt alias this.
+** If alias this fails, attempt constructor as per usual.
+** If constructor fails, rewrite <code>Foo foo = bar;</code> to <code>Foo foo = Foo.opImplicitCastFrom(bar);</code>
+** If no match is found, give a compilation error.
+
+
+* When a value is an argument in a function call, and there's more than one function in the overload set (e.g. <code>foo(bar, baz);</code>):
+** First attempt regular overloading.
+** If no match is found, attempt to rewrite each subset of parameters where the type has defined <code>opImplicitCastFrom</code> to <code>ExpectedType.opImplicitCastFrom(passedValue)</code>. This has a complexity (number of functions in overload set)*2^^(number of parameters that define <code>opImplicitCastFrom</code>)
+** If no match is found, or more than one match is found, give a compilation error.
+
+== Disabling Implicit Conversions ==
+
+If a function needs to take exactly the specified type, with no implicit conversions, the type system already enables a programmer to specify this:
+
+<syntaxhighlight lang="d">
+void foo(T)(T value) if (T == uint) {}
+
+uint a = 3;
+foo(a); // Works perfectly.
+
+int b = 4;
+foo(b); // Fails at compile-time.
+</syntaxhighlight>
+
+
+== Use cases ==
+
+When defining a type it is often desirable to have some implicit conversion. An example [http://forum.dlang.org/post/l87ivq$263r$1@digitalmars.com currently being discussed] on the forum is Option!T. With <code>opImplicitCastFrom</code>, the following would be made possible:
+
+<syntaxhighlight lang="d">
+Option!T foo(T)(bool select, T value) {
+    if (select) {
+        return value;
+    } else {
+        return none;
+    }
+}
+
+void bar(Option!int value) {}
+
+bar(4);
+</syntaxhighlight>
+
+
+std.complex is scheduled to replace built-in complex numbers. For it to be a full replacement, some new implicit conversions are necessary:
+
+<syntaxhighlight lang="d">
+void foo(Complex!float arg) {}
+
+foo(32.15);
+
+Complex!int bar() {
+    return 3;
+}
+</syntaxhighlight>
+
+
+For tagged unions (std.variant.Algebraic), the very same behavior is wanted:
+
+<syntaxhighlight lang="d">
+void foo(Algebraic!(float, string, int, MyStruct) arg) {}
+
+foo(32.15);
+foo(12);
+foo("empty string. No, really!");
+foo(MyStruct(14, "foo"));
+
+Algebraic!(int, string) bar() {
+    return ""; // Actually empty string.
+}
+</syntaxhighlight>
+
+
+When a function's signature changes, and the changes are to a type for which an instance of the original type would be a valid value, no rewriting of calling code is needed:
+
+<syntaxhighlight lang="d">
+// Was void foo(int n) {}
+void foo(Nullable!int n) {}
+
+foo(13);
+
+// Was void bar(string arg) {}
+void bar(Algebraic!(int, string) arg) {}
+
+bar("testString");
+</syntaxhighlight>
+
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

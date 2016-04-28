@@ -1,0 +1,430 @@
+{| class="wikitable"
+!Title:	
+!'''A standard exception hierarchy'''
+|-
+|DIP:	
+|33
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-04-01
+|-
+|Last Modified:
+|2013-04-01
+|-
+|Author:
+|Lars T. Kyllingstad
+|-
+|Links:
+|
+|}
+
+== Abstract and rationale ==
+
+The following is a proposal for a new hierarchy of standard exception classes, to be used in druntime, Phobos, and user code.
+
+Currently, Phobos, and to some extent druntime, has a very unstructured exception hierarchy.  Some modules define multitudes of extremely specific exception classes (e.g. <code>std.xml.XMLException</code> and descendants), which leads to a complex and cluttered API.  Other modules, again, use extremely broad exception categories (<code>std.exception.ErrnoException</code>, or even <code>Exception</code>).  This makes it very hard to distinguish between different error conditions and to handle them appropriately.
+
+This DIP aims to restructure D's standard exception hierarchy in a way that strikes a good balance between generality and detail.  The goal is to define a limited set of exception and error classes that cover all or most categories of errors, without being overly specific.  It should rarely be necessary for users to define their own exception classes, and when they do, the user-defined exceptions should naturally fit into one of the standard categories, and derive from the corresponding standard exception class.
+
+The DIP also proposes a standard way to handle errors that originate in C APIs (i.e. <code>errno</code> or <code>GetLastError()</code>).
+
+== Overview ==
+
+The proposed hierarchy is divided into three levels, not counting <code>Throwable</code>
+
+# The first level classes distinguish between programming/logic errors ([[#Error]]), normal run-time errors ([[#Exception]]) and the special out-of-memory situation ([[#OutOfMemory]]).
+# The second level classes distinguish between different error categories (e.g. conversion errors, filesystem errors, etc.).  Some classes define a <code>kind</code> member that may be used to distinguish between more specific error conditions (e.g. "file not found" vs. "permission denied").
+# The third level classes are for errors that are in principle covered by a second-level category, but for which it is desirable to provide additional data.
+
+The following is an outline of the exceptions in the hierarchy, and how they are related to each other.  Deeper levels are subclasses of those above.
+
+<pre>
+Throwable
+ + Error
+ |  | AssertError
+ |  | FormatError
+ |  | InvalidArgumentError
+ |  | RangeError
+ + Exception
+ |  | ConversionException
+ |  | EncodingException
+ |  | FilesystemException
+ |  | IOException
+ |  | NetworkException
+ |  + ParseException
+ |  |  | DocParseException
+ |  | ProcessException
+ |  + SystemException
+ |  |  | ErrnoException
+ |  |  | WinAPIException
+ |  | ThreadException
+ + OutOfMemory
+</pre>
+
+== Low-level classes ==
+
+<code>Throwable</code> is, of course, at the bottom of the hierarchy.  In this section, we discuss <code>Throwable</code>'s direct descendants, from which all other exception classes derive.
+
+=== Error ===
+<syntaxhighlight lang="d">
+class Error : Throwable { }
+</syntaxhighlight>
+
+<code>Error</code> and its subclasses are used to signal ''programming errors''.  If an <code>Error</code> is thrown, it means that there is something wrong with how the program is constructed.  Examples include array index out of bounds, invalid function arguments, etc.  Importantly, it should ''always'' be possible to avoid an <code>Error</code> by design.
+
+In general, <code>Error</code>s should not be caught, primarily because they indicate that the program logic is compromised, and that the program may therefore be in an invalid state from which there is no recovery.  Furthermore, one cannot rely on them being thrown at all.  For example, <code>assert</code> statements and array bounds checks, which both trigger <code>Error</code>s, may be disabled by compiler switches.
+
+If an <code>Error</code> ''must'' be caught, it is recommended to do so at a very high level (e.g. in <code>main()</code>), and then only to perform critical cleanup work before terminating the program.
+
+=== Exception ===
+<syntaxhighlight lang="d">
+class Exception : Throwable { }
+</syntaxhighlight>
+
+<code>Exception</code> and its descendants are used to signal normal run-time errors.  These are exceptional circumstances that the programmer cannot reasonably be expected to avoid by design.  Examples include file not found, problems with parsing a document, system errors, etc.  Most errors fall into this category.
+
+=== OutOfMemory ===
+<syntaxhighlight lang="d">
+class OutOfMemory : Throwable { }
+</syntaxhighlight>
+
+This exception is thrown on an attempt to allocate more memory than what is currently available for the program.  Strictly speaking, this is ''not'' an <code>Error</code>, as the programmer cannot reasonably be expected to check memory availability before each allocation.  However, is not desirable to catch it along with normal <code>Exception</code>s either, as an out-of-memory condition requires special treatment.  Therefore, this DIP places <code>OutOfMemory</code> at the first level of the hierarchy, alongside <code>Error</code> and <code>Exception</code>.
+
+'''Supersedes:''' <code>core.exception.OutOfMemoryError</code>
+
+== Errors ==
+
+Here follows a more detailed description of the various <code>Error</code> subclasses.
+
+=== AssertError ===
+<syntaxhighlight lang="d">
+class AssertError : Error { }
+</syntaxhighlight>
+
+This error is thrown when an <code>assert</code> statement fails.
+
+=== FormatError ===
+<syntaxhighlight lang="d">
+class FormatError : Error { }
+</syntaxhighlight>
+
+This error is thrown by functions such as <code>std.format.formattedWrite()</code>, <code>std.stdio.writeln()</code>, and so on, to signal a mismatch between format specifiers and the provided objects.  It could also be thrown by future date/time formatting functions in <code>std.datetime</code> and other functions that have similar purposes.
+
+Sometimes, it may be desirable to pass user-provided format strings to such functions.  However, bad user input should ''never'' result in an <code>Error</code>.  In such cases, it is both acceptable and recommended to catch the <code>FormatError</code>, but note that it should be caught as close as possible to the offending function call, and not be allowed to propagate through the public API.
+<syntaxhighlight lang="d">
+auto fmt = getUserInput("Please enter format string: ");
+try
+{
+    writefln(fmt, 2.3, 107, "Hello World!");
+}
+catch (FormatError e)
+{
+    stderr.writeln("Bad format string");
+}
+</syntaxhighlight>
+Alternatively, if not terribly inconvenient, the function's own validation code could be placed in a separate function, which could be used directly:
+<syntaxhighlight lang="d">
+// Phobos code
+bool isValidFormat(string fmt) { ... }
+void writefln(string fmt, ...)
+{
+    if (!isValidFormat(fmt)) throw new FormatError("Invalid format string");
+    ...
+}
+
+// User code
+auto fmt = getUserInput("Please enter format string: ");
+if (!isValidFormat(fmt)) stderr.writeln("Bad format string");
+else writefln(fmt, 2.3, 107, "Hello World!");
+</syntaxhighlight>
+
+'''Supersedes:''' <code>std.format.FormatException</code>
+
+=== InvalidArgumentError ===
+<syntaxhighlight lang="d">
+class InvalidArgumentError : Error { }
+</syntaxhighlight>
+
+This error is thrown when one or more function arguments are invalid.  Since it is an <code>Error</code>, it should only be used to signal errors that the programmer (i.e. the user of the function in question) can reasonably be expected to avoid, and which are not too costly to check.  Circumstances that are out of the programmer's control, or which are so expensive to verify that it is undesirable to have them checked by both the caller and the callee, should be signalled with an <code>Exception</code> instead.
+
+<syntaxhighlight lang="d">
+void processFile(string path)
+{
+    // The following is an acceptable use of InvalidArgumentError,
+    // as the function should never be given an empty path, and the
+    // check is trivial.
+    if (path.empty)
+        throw new InvalidArgumentError("path is empty");
+
+    // The function caller should not be expected to verify file existence.
+    // Firstly, it could change between the time it is checked and the time
+    // the function is called, and secondly, it requires filesystem lookup
+    // which is a relatively expensive operation.
+    if (!exists(path))
+        throw new FilesystemException("File not found: "~path);
+}
+</syntaxhighlight>
+
+=== RangeError ===
+<syntaxhighlight lang="d">
+class RangeError : Error { }
+</syntaxhighlight>
+
+This error is thrown on illegal range operations.  Examples include when an array index is out of bounds, when <code>front</code> or <code>popFront()</code> is called on an <code>empty</code> range, etc.
+
+<syntaxhighlight lang="d">
+struct MyRange(T)
+{
+    @property bool empty() { ... }
+    @property T front()
+    {
+        if (empty) throw new RangeError("front called on empty range");
+        ...
+    }
+    void popFront()
+    {
+        if (empty) throw new RangeError("popFront() called on empty range");
+        ...
+    }
+    ...
+}
+</syntaxhighlight>
+
+=== Other Errors ===
+
+Currently, there exist a set of error classes which are used only in the runtime, for very specific purposes.  Some of these may have been rendered obsolete by language changes, and if so, they should be removed.  In any case, they are never to be used in high-level code (e.g. Phobos).
+
+* <code>core.exception.FinalizeError</code>
+* <code>core.exception.HiddenFuncError</code>
+* <code>core.exception.InvalidMemoryOperationError</code>
+* <code>core.exception.SwitchError</code>
+
+
+== Exceptions ==
+
+=== ConversionException ===
+<syntaxhighlight lang="d">
+class ConversionException : Exception
+{
+    /// Different kinds of conversion errors.
+    enum Kind
+    {
+        unknown,
+        invalid,
+        overflow,
+        underflow
+    }
+
+    /// Which kind of conversion exception we are dealing with.
+    Kind kind;
+}
+</syntaxhighlight>
+
+This exception is thrown on failure to convert one value/type to another.  Its most prominent use will of course be in <code>std.conv</code>, but it is by no means limited to this module.
+
+'''Supersedes:''' <code>std.conv.ConvException</code>, <code>std.conv.ConvOverflowException</code>
+
+=== EncodingException ===
+<syntaxhighlight lang="d">
+class EncodingException : Exception { }
+</syntaxhighlight>
+
+This exception is thrown when an error is detected in a low-level data encoding.  This will typically be binary encodings such as UTF, Base64, various compressed data formats, etc.
+
+'''Supersedes:''' <code>core.exception.UnicodeException</code>, <code>std.base64.Base64Exception</code>, <code>std.encoding.EncodingException</code>, <code>std.encoding.UnrecognizedEncodingException</code>, <code>std.utf.UTFException</code>, to some extent <code>std.zip.ZipException</code>
+
+'''See also:''' [[#ParseException, DocParseException]]
+
+=== FilesystemException ===
+<syntaxhighlight lang="d">
+class FilesystemException : Exception
+{
+    /// The various kinds of filesystem errors.
+    enum Kind
+    {
+        unknown,
+        fileNotFound,
+        permissionDenied,
+        fileExists,
+        invalidFilename,
+        notAFile,
+        notADirectory,
+    }
+
+    /** The path to the filesystem node with which there was a problem,
+        or null if the exception is not associated with a particular node.
+    */
+    string path;
+
+    /// Which kind of error we are dealing with.
+    Kind kind;
+}
+</syntaxhighlight>
+
+This exception is thrown on errors that occur during filesystem operations such as file lookup/deletion/renaming, directory change, etc.
+
+'''Supersedes:''' <code>std.file.FileException</code>, some uses of <code>std.exception.ErrnoException</code>, some uses of <code>std.stdio.StdioException</code>, <code>std.stream.StreamFileException</code> and subclasses
+
+'''See also:''' [[#IOException]]
+
+=== IOException ===
+<syntaxhighlight lang="d">
+class IOException : Exception { }
+</syntaxhighlight>
+
+This exception is thrown on errors during read/write operations.  This could signal disk failure, low-level network errors, problems in creating/accessing anonymous pipes, etc.
+
+'''Supersedes:''' <code>std.stream.StreamException</code> and most of its subclasses, some uses of <code>std.stdio.StdioException</code>, some uses of <code>std.socket.SocketException</code> and subclasses
+
+'''See also:''' [[#FilesystemException]], [[#NetworkException]]
+
+=== NetworkException ===
+<syntaxhighlight lang="d">
+class NetworkException : Exception
+{
+    /// The different kinds of network errors
+    enum Kind
+    {
+        unknown,
+        timeout,
+        hostNotFound,
+        addressError,
+    }
+
+    /// Which kind of network error has occurred.
+    Kind kind;
+}
+</syntaxhighlight>
+
+This exception signals a high-level network failure.  Examples include host/ip lookup failure, timeout, etc.
+
+'''Supersedes:''' <code>std.net.curl.CurlException</code> and subclasses, some uses of <code>std.socket.SocketException</code> and subclasses
+
+'''See also:''' [[#IOException]]
+
+=== ParseException, DocParseException ===
+<syntaxhighlight lang="d">
+class ParseException : Exception { }
+
+class DocParseException : ParseException
+{
+    /** The path to the file in which the error was detected, or null if
+        the exception is not associated with a disk file.
+    */
+    string file;
+
+    /** The line number at which the error was detected, or 0 if the exception
+        is not associated with a particular line.
+    */
+    uint line;
+
+    /** The column number at which the error was detected, or 0 if the exception
+        is not associated with a particular column.
+    */
+    uint column;
+}
+</syntaxhighlight>
+
+These exceptions are thrown on errors that are detected while parsing a high-level file or data format.  Typical examples are markup languages (XML, JSON, etc.), programming languages, high level data containers (ZIP, OGG, etc.).  Use <code>DocParseException</code> for human-readable formats where the error can be traced back to a specific file, line and/or column.
+
+'''Supersedes:''' <code>std.csv.CSVException</code> and subclasses, <code>std.json.JSONException</code>, <code>std.uuid.UUIDParsingException</code>, <code>std.xml.XMLException</code> and subclasses.
+
+'''See also:''' [[#EncodingException]]
+
+=== ProcessException ===
+<syntaxhighlight lang="d">
+class ProcessException : Exception { }
+</syntaxhighlight>
+
+This exception is thrown on errors that occur during process handling.  This includes failure to start a process, failure to wait for a process, etc.
+
+=== SystemException, ErrnoException, WinAPIException ===
+<syntaxhighlight lang="d">
+class SystemException : Exception { }
+
+class ErrnoException : SystemException
+{
+    /// The errno code with which this exception is associated.
+    int errno;
+}
+
+class WinAPIException : SystemException
+{
+    /// The Windows error code with which this exception is associated.
+    int code;
+}
+</syntaxhighlight>
+
+These exceptions are thrown for errors that originate in underlying OS-specific APIs or other C APIs.
+
+<code>ErrnoException</code> and <code>WinAPIException</code> pick up an <code>errno</code> code or Windows <code>GetLastError()</code>, respectively, on construction, and automatically retrieve the standard textual description of the error (e.g. using <code>strerror</code>).  In most cases, it is recommended that these two only be thrown from functions which are thin wrappers around C functions, and that they are chained to higher-level exceptions before leaving the D API.  (See [[#Exceptions that originate in C errors]] below.)
+
+A plain <code>SystemException</code> may be useful for signaling a general system error which is not associated with a particular code, and which does not fit naturally into any of the other exception categories.
+
+'''Supersedes:''' <code>std.windows.registry.Win32Exception</code>, <code>std.windows.registry.RegistryException</code>
+
+=== ThreadException ===
+<syntaxhighlight lang="d">
+class ThreadException : public Exception { }
+</syntaxhighlight>
+
+This exception is thrown on errors during thread and fiber management.
+
+'''Supersedes:''' <code>core.thread.FiberException</code>
+
+== Exceptions that originate in C errors ==
+
+The D standard libraries make heavy use of C APIs under the hood.   These typically signal errors by means of an <code>errno</code> code, or, in the case of the Windows API, a code returned by <code>GetLastError()</code>.  As such, the exceptions described in this DIP will often be associated with such an error code, and it may sometimes be useful for the programmer to be able to access it.
+
+Today, many exception classes have this functionality built in, such as <code>std.file.FileException</code>, <code>std.socket.SocketOSException</code>, <code>std.stdio.StdioException</code>, etc.  There are a few problems with this:
+
+# The same error-code handling functionality is duplicated across several classes.
+# These classes may also signal errors which are ''not'' associated with a system error code, and in this case the presence of such functionality may be confusing.
+# These classes must support and distinguish between the <code>errno</code> mechanism and the Windows-specific <code>GetLastError()</code> mechanism.
+
+Another approach which is also used in Phobos is to throw an <code>std.exception.ErrnoException</code>.  This makes it obvious that the error is associated with an <code>errno</code> code, but it does not statically classify the error.  It could be a filesystem error, a read/write error, a process creation error, or, basically, anything.  This defeats the purpose of having an exception hierarchy in the first place.
+
+This DIP therefore proposes that the standard way to handle this situation should be to create a separate exception for the system error, in the form of a <code>SystemException</code> or one of its descendants (see [[#SystemException, ErrnoException, WinAPIException]], and to ''chain'' this exception to a higher-level exception.  Here is an example:
+<syntaxhighlight lang="d">
+struct MyFile
+{
+    this(string path, string mode)
+    {
+        try
+        {
+            myOpen(path, mode);
+        }
+        catch (ErrnoException ex)
+        {
+            // Chain the ErrnoException to another exception.
+            switch (ex.errno)
+            {
+            case EINVAL: throw new InvalidArgumentError("Invalid file mode: "~mode, ex);
+            case EACCES: throw new FilesystemException(path, FilesystemException.Kind.permissionDenied, ex);
+            case EEXIST: throw new FilesystemException(path, FilesystemException.Kind.fileExists, ex);
+            // ...and so on.
+            }
+        }
+    }
+
+private:
+    void myOpen(string path, string mode)
+    {
+        m_file = fopen(toStringz(path), toStringz(mode));
+        if (!m_file) throw new ErrnoException; // errno is automatically picked up
+    }
+
+    FILE* m_file;
+}
+</syntaxhighlight>
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

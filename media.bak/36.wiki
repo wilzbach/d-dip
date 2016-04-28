@@ -1,0 +1,218 @@
+{|class="wikitable"
+!Title:	
+!'''rvalue references'''
+|-
+|DIP:	
+|36
+|-
+|Version:
+|2
+|-
+|Status:
+|Rejected
+|-
+|Created:
+|2013-04-08
+|-
+|Last Modified:
+|2013-04-08
+|-
+|Author:
+|Randy Schütt, Михаил Страшун
+|-}
+
+== Abstract ==
+This DIP describes issues with current usage of various rvalues as a function parameters and proproses possible improvement - formalization of scope references. As a positive side effect, intentions of <code>scope</code> qualifier are better defined into formal restrictions. Minor redefinition of <code>ref</code> in regards to <code>@safe</code> is also proposed.
+
+== Rationale ==
+There is a quite common necessity to pass some data as a function argument without both copying and caring about its referrability. Currently D provides no means to do it properly. <code>ref T</code> can't be used with rvalue literals. <code>T</code> results in (possibly) costly value copying for aggregate rvalues. <code>auto ref T</code> is template-based and thus bloats at least the symbol table. A solution is needed that will be simple, provide some guarantees and avoid extra bloat.
+
+<source lang="D">
+void main()
+{
+    // Only signature for func1 which accepts both is func1(int), which is acceptable for trivial types
+    int x;
+    func1(x);
+    func1(42);
+
+    // For aggregate types passing by reference may be desired for both performance and avoiding side-effects of non-trivial constructors.
+    // func2(ref Aggr) will accept only lvalues
+    struct Aggr { }
+    Aggr s;
+    func2(s);
+    func2(Aggr()); // fail
+
+    // Now the question is, how can I say "I want to process this data with no side-effects, won't mutate it and don't care if is adressable"?
+    // func3(T)(auto ref T) is current solution but it works by adding extra template instantiation for each case. This is both not needed
+    // and does not scale with argument count.
+}
+</source>
+
+Discussion threads:
+* http://forum.dlang.org/post/ntsyfhesnywfxvzbemwc@forum.dlang.org
+* http://forum.dlang.org/post/uswucstsooghescofycp@forum.dlang.org
+
+== Description ==
+=== Core proposal ===
+# <code>scope ref</code> is similar to <code>ref</code> but may be allowed in <code>@safe</code> code as it is prohibited to escape or store scoped reference, as well as taking its address. It is allowed to accept rvalues, temporary lvalues are created for them automatically.
+# <code>const scope ref</code> (or <code>in ref</code>) is like <code>scope ref</code> but prohibits mutation. It imposes usage restrictions (can't modify, can't store reference, can't take address) than make working with them indistinguishable from working with value types. Compiler can abuse it to create temporary variables for trivial type literals and pass references to them instead - it can't possibly change function semantics.
+
+==== Example ====
+<source lang="D">
+import std.stdio;
+
+struct A {
+public:
+	int id;
+
+	this(int id) {
+		this.id = id;
+	}
+
+	this(this) {
+		writeln("A Postblit for ", this.id);
+	}
+}
+
+// Like a normal ref A, more restrictive because of scope, more permissive because accepts rvalue temporaries
+void test1(scope ref A a) {
+        // A* addr = &a; // prohibited, see explanations later
+}
+
+// Almost nothing can be done with parameter, only value-style read access. Accepts rvalues.
+void test12(in ref A a) {
+}
+
+// Does not pretend to be @safe any more
+void test2(ref A a) {
+}
+
+// Similar to "auto ref" but no extra template instantations. Compiler creates temporaries for rvalues.
+void test3(T)(in ref T id) {
+}
+
+// Consistent with test1. Also no extra template instances.
+void test32(T)(scope ref T id) {
+}
+
+void main() {
+    test1(A(42)); // @safe, this temporary value is valid for mutation and "scope" ensures it does not leak scope
+    A a = A(23); // no difference
+    test1(a);
+    test2(A(1337)); // Prohibited, plain "ref" can't accept rvalues
+    test2(a); // fine, but not @safe, unless it can be verified that a is allocated on heap in GC memory
+    test3(1337); // Fine and @safe. Temporary int variable with value 1337 is created.
+    test3(a.id); // Same but no temporary is needed.
+    test32(1337); // Fine, temporary mutable int variable is created with value 1337
+    test32(a.id); // fine and @safe
+}
+</source>
+
+=== Definition of "scope" qualifier for ref types ===
+
+Following limitation apply to <code>scope ref</code> function parameters (including <code>in ref</code>):
+# Address of parameter can't be taken (and thus saved)
+# Parameter can't be returned from function
+# Parameter can only be used as an argument for other function if it also accepts <code>scope ref</code>, no implicit casting away.
+
+=== @safe concerns ===
+
+One of issues related to reference parameters that is raised in [[DIP25]] is that they currently allow subverting <code>@safe</code> limitations, despite being considered <code>@safe</code>. One of beneficial effects of this proposal is that it somewhat mitigates this issue in a simple manner. <code>scope ref</code> parameter limitations make them perfectly legal to use in safe code with no additional analysis. At the same time, such references cover a considerable number of use cases that may be required by safe code while not harming the power of unsafe ones. This potentially allows restricting the uses of plain <code>ref</code> in <code>@safe</code> code and leaving only <code>scope ref</code> allowed there. (Please see [[DIP35]] for a further examination of this issue.)
+
+This approach is not required for core proposal and is bonus opportunity that will become available as a side-effect.
+
+=== Backwards compatibility ===
+
+* <code>in ref</code> has been allowed from 2.060 : http://d.puremagic.com/issues/show_bug.cgi?id=8105
+* <code>scope ref</code> is still disallowed. ("Error: scope cannot be ref or out")
+* <code>in</code> is equivalent to <code>const scope</code> : http://dlang.org/function.html
+* Currently <code>scope</code> affects only delegate parameters. In other cases, <code>scope</code> has no meaning.
+
+It could possibly break code that already uses <code>in ref</code> (wrongly assuming it as abbreviation for const ref) and expects only an lvalue is accepted. Such code is both incorrect and very unlikely to exist. So no real code breaking change. Furthermore, many users (especially Jonathan) always warned not to use <code>in ref</code> as an abbreviation for <code>const ref</code> because it is wrong by language specification.
+
+Other code breakage should not be possible because:
+* <code>in ref</code> became more permissive, no restrictions added
+* <code>scope ref</code> is currently not allowed at all
+
+=== Overloading rules ===
+If you have several overloads of a function, that take their arguments by value, by ref and by scope ref, scope ref has always minor priority:
+
+<source lang="D">
+void foo(A a) {
+
+}
+
+void foo(ref A a) {
+
+}
+
+void foo(scope ref A a) {
+
+}
+
+void main() {
+	foo(A()); // call: foo(A a)
+	A a;
+	foo(a); // call: foo(ref A a)
+}
+</source>
+
+The same applies for 'const A', 'ref const A' and 'in ref A'.
+This behaviour is already implemented by Kenji's Pull Request.
+
+=== Interconnecton with DIP25 ===
+
+This DIP shares an area of domain with [[DIP25]] but suits different goals. DIP36 is about defining single reference type that can accept both rvalues and lvalues. DIP25 is about using reference types in <code>@safe</code>. They don't conflict and don't depend on each other.
+
+However, adopting this DIP provides some new options to solve DIP25 problem, providing reference type that is restricted enough to be safe on its own. This may be take advantage of or may not and is not really relevant. Code examples in this DIP have comments in regards of safety though to provide an overview for someone interested in this topic.
+
+See also [[DIP35]], which contains an amendment to DIP25 and finds another use for 'scope'. Fortunately, it is not likely to cause conflict with the use proposed here.
+
+=== Other proposed syntaxes ===
+
+{|class="wikitable"
+!Syntax	
+!Issues
+|-
+|@ref
+|looks like a one-character hack. Not clear what it means.
+|-
+|ref&
+|looks like a one-character hack. Not clear what it means. Looks more like double ref (T&& from C++)
+|-
+|auto ref
+|Template bloat, [http://forum.dlang.org/post/mailman.293.1364249651.4724.digitalmars-d-learn@puremagic.com nicely explained by Jonathan]
+|-
+|const ref
+|Rejected by Andrei because const is far more restrictive in D than in C++. Does not allow mutable rvalues.
+|-
+|immutable ref
+|Same as const ref
+|-
+|@temp ref
+|Is somewhat clearer, but adds an entirely new attribute to the language
+|-
+|final ref
+|Not clear what it means, introducing new meaning for 'final'.
+|-
+|A& (like C++'s ref)
+|Need a 'hack' in mtype.h / mtype.c. Type struct need a new boolean property: isRvRef
+|}
+
+=== Discussions on topic ===
+* http://forum.dlang.org/post/ylebrhjnrrcajnvtthtt@forum.dlang.org
+* http://forum.dlang.org/post/zteryxwxyngvyqvukqkm@forum.dlang.org
+* http://forum.dlang.org/post/yhnbcocwxnbutylfeoxi@forum.dlang.org
+* http://forum.dlang.org/post/qbirgbuvjndkviymuypr@forum.dlang.org
+* http://forum.dlang.org/post/tkzyjhshbqjqxwzppdin@forum.dlang.org
+* http://forum.dlang.org/post/kcksvf$314v$1@digitalmars.com
+* http://forum.dlang.org/post/nirfuenixutsbgyrcsla@forum.dlang.org
+
+=== Experimental implementations ===
+* https://github.com/9rnsr/dmd/commits/new_inref (by Kenji)
+* https://github.com/Dgame/dmd/commits/scope_in_ref (by me)
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

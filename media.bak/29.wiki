@@ -1,0 +1,163 @@
+{| class="wikitable"
+!Title:	
+!'''Unique Pointers'''
+|-
+|DIP:	
+|29
+|-
+|Version:
+|1
+|-
+|Status:
+|'''Draft'''
+|-
+|Created:
+|2013-02-28
+|-
+|Last Modified:
+|2013-06-24
+|-
+|Language:
+|D2
+|-
+|Breaks:
+|Nothing, it enables code that doesn't compile at the moment
+|-
+|Links:
+|[https://github.com/D-Programming-Language/dmd/pull/1700 Discussion on github]
+[http://www.digitalmars.com/d/archives/digitalmars/D/bugs/Issue_8993_New_Implement_unique_references_isolated_memory_44371.html Discussion on n.g.]
+[http://www.digitalmars.com/d/archives/digitalmars/D/Immutable_and_unique_in_C_180572.html More Discussion on n.g.]
+|}
+
+== Abstract ==
+Currently, pointers cannot be converted to and from shared and immutable without an explicit and unsafe cast. Unique pointers can be implicitly cast to and from shared and immutable in safety. A unique pointer can be discovered by examining the expression that generated the pointer.
+
+== Rationale ==
+Requiring switching to unsafe code to do routine things like create immutable references is a glaring problem. By recognizing unique pointers much of this can be done safely. More advanced analysis can uncover more cases that can be done safely.
+
+== Definition ==
+
+;Unique Value
+:Rvalues are always unique.
+
+;Unique Reference
+:A reference is unique if there are no other references to the same object (including references to the object's interior).
+
+;Transitively Unique Reference
+
+:A Unique Reference and there are no external references to any values transitively accessible through it.
+
+;Implicitly Convertible To Immutable
+:One of:
+:# The type is implicitly convertible to Immutable.
+:# Transitively Unique Reference
+:# Transitive graph is reachable only via immutable references
+
+; Implicitly Convertible To Shared
+:One of:
+:# Type is implicitly convertible to Shared
+:# Transitively Unique Reference; head is not immutable
+:# Transitive graph is reachable only via shared or immutable references; head is not immutable
+
+== Library Types ==
+
+Each of these statically verifies that Expression e has the desired properties.
+Using the result as an rvalue results in overwriting the value with T.init.
+The compiler statically recognizes these types as having the desired characteristic,
+i.e. they are magic types.
+
+Each has a static <tt>assume(T e)</tt> method which unsafely assumes the properties of the argument
+Expression e and returns an instance of the type.
+
+;<tt>Unique(T)(T e)</tt>
+:T: class, pointer, dynamic array, delegate
+:Forms a transitively unique reference
+
+;<tt>UniqueImmutable(T)(T e)</tt>
+:T: class, pointer, dynamic array, delegate
+:Implicitly convertible to immutable(T)
+
+;<tt>UniqueShared(T)(T e)</tt>
+:T: class, pointer, dynamic array, delegate
+:Implicitly convertible to shared(T)
+
+== Expressions ==
+
+;<tt>Value</tt>
+:This is tried first. If it produces false, the checks for particular Expression types are then tried.
+
+:;<tt>Unique</tt>
+::If all the fields are non-reference types, then true
+
+:;<tt>UniqueImmutable</tt>
+::If type can be implicitly cast to immutable
+
+:;<tt>UniqueShared</tt>
+::If type can be implicitly cast to shared
+
+;<tt>Variable</tt>
+:If type is Unique, UniqueImmutable, or UniqueShared
+
+;<tt>CommaExpression</tt>
+:result of right operand
+
+;<tt>=</tt>
+;<tt>+=</tt>
+;<tt>-=</tt>
+:result of left operand
+
+;<tt>ConditionalExpression</tt>
+:result of left operand and'ed with result of right operand
+
+;<tt>AddExpression</tt>
+:if one operand is a pointer, and the other an integral constant, then the result is the result of the pointer operand
+
+;<tt>CatExpression</tt>
+;<tt>CatAssignExpression</tt>
+:result is the and'ing of all the elements in the operands
+
+;<tt>CallExpression</tt>
+:if function is pure, then result is the and'ing of all the arguments to the function
+
+;<tt>NewExpression</tt>
+:result is the and'ing of all the arguments. If a constructor is called, and it is pure, the result includes the and'ing of all the default initializers for the fields
+
+;<tt>CastExpression</tt>
+:result of operand being cast
+
+;<tt>Lambda</tt>
+;<tt>FunctionLiteral</tt>
+:result of the expression used to initialize the .ptr field of delegates
+
+;<tt>IndexExpression</tt>
+:result of operand being indexed
+
+;<tt>SliceExpression</tt>
+:result of operand being sliced
+
+;<tt>ArrayLiteral</tt>
+:result is the and'ing of all the array elements
+
+;<tt>AssocArrayLiteral</tt>
+:result is the and'ing of all the array keys and values
+
+;<tt>StructLiteral</tt>
+:result is the and'ing of all the expressions coupled with the initializers for the rest of the fields
+
+
+== Implementation ==
+
+Add following member functions to Expression:
+
+ bool isUniqueReference();
+ 
+ bool isTransitivelyUniqueReference();
+ 
+ bool isImplictlyConvertibleToImmutable();
+ 
+ bool isImplictlyConvertibleToShared();
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

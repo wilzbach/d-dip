@@ -1,0 +1,59 @@
+{| class="wikitable"
+!Title:
+!'''Autodecode Should Not Throw'''
+|-
+|DIP:
+|76
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2015-04-06
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Andrei Alexandrescu and Walter Bright
+|-
+|Links:
+|[http://forum.dlang.org/post/mfvi86$10ml$1@digitalmars.com NG Discussion] — [https://issues.dlang.org/show_bug.cgi?id=14519 RFE]
+|}
+
+
+== Abstract ==
+
+When the autodecoder encounters invalid UTF, it throws an exception.
+This proposal changes that so it replaces the invalid UTF with the
+Replacement Character.
+
+== Benefits ==
+
+* Becomes nothrow, which enables code that uses it to become nothrow. Nothrow code does not need to produce exception unwinding wrappers, which can improve the performance of using ref counted objects.
+* Becomes @nogc, because the thrown exception is allocated on the GC.
+* Becomes consistent with the behavior of std.utf.byDchar().
+* Will be somewhat faster.
+* Current industry practice has evolved towards using replacement characters for bad UTF rather than failing.
+
+== Breaking Existing Code ==
+
+This can break existing code, although it seems highly unlikely that any programs
+actually require the decoding to throw on invalid UTF.
+
+
+== Deprecation Path ==
+
+There doesn't seem to be any deprecation path for this change. It will have to be
+abrupt.
+
+== NG Announcement ==
+
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

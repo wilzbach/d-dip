@@ -1,0 +1,144 @@
+== DIP 41: dmd/rdmd command line overhaul. ==
+
+{| class="wikitable"
+!Title:	
+!''dmd/rdmd command line overhaul.''
+|-
+|DIP:	
+|41
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-05-20
+|-
+|Last Modified:
+|2013-05-20
+|-
+|Author:
+|Timothee Cour
+|-
+|Links:
+|[http://forum.dlang.org/post/mailman.736.1365618052.4724.digitalmars-d@puremagic.com dmd command line options bad design: -offilename, -Ddocdir etc.]
+|}
+
+== Abstract ==
+This DIP seeks to improve dmd and rdmd's command line flags, to make it more self-consistent and consistent with other tools (including other D compilers), more expandable, avoid existing corner cases, and better interact with other tools such as rdmd. It also proposes new flags and proposes a simple deprecation path to follow.
+
+== Deprecate -offilename (etc) in favor of -of=filename (etc) ==
+Dmd currently uses 2 conventions for its flags with arguments:
+* type A: -offilename, -Dddocdir, -Dffilename, -Ipath (etc)
+* type B: -version=ident (etc) 
+
+Type A, the most common in dmd, is problematic:
+* it doesn't scale: we can't have any new flag starting with "-I" or "-L", etc as it would create conflicts. 
+* it's visually harder to tell from the command line the options from the arguments to these options
+* it's using a different (worst) convention from most other tools (including other D compilers, like gdc or ldc)
+
+For reference, ldc uses:
+-of=filename, -Dd=docdir, -Df=filename, -I=path etc.
+
+== Deprecate passing file without extension ==
+I would like to deprecate the current behavior where one can pass the file name without extension (main vs main.d) as source. Consistency is better than avoiding to type those 2 characters. 
+I can create a pathological case where '''main.d''' is conflicting with '''main.d.d''' (the 2 files have different contents). 
+<syntaxhighlight lang="bash">
+rdmd main.d
+</syntaxhighlight>
+Which one do you think is called when we call rdmd main.d ?
+
+Note, I raised a very analogous concern here [https://github.com/D-Programming-Language/dmd/pull/1871#issuecomment-16101987] regarding naming of object files in a flat hierarchy, see my example with 
+<syntaxhighlight lang="bash">
+dmd -c -oq foo/mod.d foo_mod.d
+</syntaxhighlight>
+
+== Improving compile and run with arguments ==
+The current strategy of rdmd is to treat as input arguments anything after the first source file: 
+<syntaxhighlight lang="bash">
+rdmd main.d myfirstprogramarg # a bit awkward, especially with optional extension it gets hard to parse visually.
+</syntaxhighlight>
+
+This is error prone, and inconsistent with dmd's behavior, which is:
+<syntaxhighlight lang="bash">
+dmd src1.d -run main.d myfirstprogramarg #a bit awkward, need to split the source from the main file.
+</syntaxhighlight>
+
+It also makes it impossible to do this:
+<syntaxhighlight lang="bash">
+dmd -c main.d 
+dmd -run main.o myfirstprogramarg #Error: -run must be followed by a source file
+</syntaxhighlight>
+
+I suggest instead something simpler, explicit and consistent, using -args as a dmd command line argument, that would just work as well with rdmd:
+
+<syntaxhighlight lang="bash">
+dmd main.d src1.d -args myfirstprogramarg
+rdmd main.d -args myfirstprogramarg
+</syntaxhighlight>
+
+== Distinguish dmd vs rdmd flags with a single flag --dflags ==
+Currently we distinguish rdmd's arguments from dmd's arguments via '--' vs '-'. A better way IMO would be to have a special flag indicating the start of dmd's (or gdc/ldc...) flags: eg 
+<syntaxhighlight lang="bash">
+rdmd --chatty --dflags -version=myversion main.d
+</syntaxhighlight>
+
+== Deprecate rdmd --main (redundant with dmd -main) ==
+dmd -main was introduced in 2.063, so we should deprecate the use of rdmd --main, which is redundant.
+
+== Deprecate dmd -property ==
+see [https://github.com/D-Programming-Language/druntime/pull/491 here]
+
+== Provide Long and short help for dmd / rdmd ==
+dmd: short help (same as dmd -help=short)
+dmd -help=long: long help (ie more detailed help)
+In particular some flags could have better description in a long help form:
+-gc, -gs
+Another point is that dmd --help is inconsistent currently: its the only dmd flag with 2 dashes. This might cause problem with rdmd's current behavior to distinguish between dmd and rdmd flags, among other things.
+
+== New / improved flags ==
+-unittest=package.module: 
+unittest a given package/module proposed by Nick [http://forum.dlang.org/post/20130520215251.00000882@unknown here].
+(Nick suggested -unittest=pagkage.name.* but we're going to have 'transparently make module into package' implemented so that particular form might not be necessary)
+
+-L='space separated list of commands for linker'
+eg: dmd -L='-L/opt/local/lib/ -ljpeg' main.d
+
+-profile_file=filename:
+to save profile log file to a given filename instead of default currentdir/trace.{def,log}
+
+== Deprecation path ==
+To implement those changes to dmd and rdmd, we can support both existing and new behavior using the following deprecation path:
+
+1)
+Make all future flags have type B instead of type A.
+
+2)
+Migrate all A flags to B flags (say in next dmd release): 
+
+2a)
+One way is to introduce command line arguments -flagstyle=old or -flagstyle=new:
+<syntaxhighlight lang="bash">
+dmd -offilename main.d #works but generates a warning for now, and error in a subsequent dmd release
+dmd -flagstyle=old -offilename main.d #works and does not generate a warning.
+dmd -flagstyle=new -of=filename main.d #works. After a certain time passed, -flagstyle=new is implied
+</syntaxhighlight>
+
+Note, A and B conventions for flags that currently are using A convention can't be mixed in a command line call, eg: -offilename -Ddoc=dir will give error, in all 3 cases above.
+
+2b) 
+An alternative way is to use a new binary name (dmd2, reminds of D2, ldc2, ldmd2) instead of -flagstyle=new. I don't like this as much somehow, as it requires compiling 2 binaries instead of 1, which complicates build.
+
+3)
+Likewise with the other proposed changes: -flagstyle=old would use existing behavior, -flagstyle=new would use proposed new behavior.
+
+== Notes ==
+It seems at least some of the changes proposed have support of Walter ([http://forum.dlang.org/post/kk4ejt$1pnq$1@digitalmars.com here]).
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

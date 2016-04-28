@@ -1,0 +1,129 @@
+{| class="wikitable"
+!Title:	
+!'''Annotations'''
+|-
+|DIP:	
+|6
+|-
+|Version:
+|2
+|-
+|Status:
+|'''Approved'''
+|-
+|Created:
+|2009-08-01
+|-
+|Last Modified:
+|2009-08-21
+|-
+|Author:
+|Ary Borenszweig <ary
+|-
+|Links:
+|[[DIP6/Archive]] — [http://prowiki.org/wiki4d/wiki.cgi?LanguageDevel/DIPs/DIP6 Original Prowiki Page]
+|-
+|Supercedes:
+|[[DIP4|DIP4 (Properties)]]
+|}
+
+<div style="padding: 1ex 1ex; background: #ffd;">Note: This page should be reviewed and updated to reflect the actual syntax used for annotations. This page has already been archived and the version increased.</div>
+
+== Abstract ==
+Extend the D programming language with annotations. Annotations are metadata attached to declarations and variables that can later be queried at compile-time or runtime. This metadata can't otherwise be expressed except by using boilerplate code or separate files that explicitly state which declaration have which metadata, but the process is ad-hoc and not standarized. 
+
+Annotations already exist in other languages:
+
+Java: http://java.sun.com/j2se/1.5.0/docs/guide/language/annotations.html
+
+C# (named "atrributes"): http://msdn.microsoft.com/en-us/library/aa287992(VS.71).aspx
+
+== Rationale ==
+Annotations will allow several things: reduce the amount of keywords and extend the language more easily.
+
+By reducing the ammount of keywords programmers can use more declarative names for their variables. It also reduces lexer and parser changes when upgrading the language.
+
+The language can be extended more easily just by adding new annotation names instead of new keywords: new keywords might render old code not compilable, while with new annotations that can never happen.
+
+General-purpose attributes allow many other things: specify how serialization should be done, how a field should be stored in a database, how a method maps to an http request, whether a method should do security checks before executing, whether a method should run as a test and what's the thrown exception is.
+
+== Description ==
+The idea is to introduce annotations in the D language. As a first stage, users won't be able to define annotations: some well-known annotations will exist and that's it.
+
+Proposed syntax: @annotation(arguments). This is what Java uses. Other syntax can be [annotation(arguments)]. This is what C# uses. Java's syntax has the advantage of having to type less when the annotation has no arguments: @annotation vs. [annotation].
+
+It can be applied to declarations:
+<syntaxhighlight lang="d">
+@annotation
+int x;
+
+@annotation
+class Foo { }
+</syntaxhighlight>
+
+== Usage ==
+Annotations could be used for several things now. For example:
+<syntaxhighlight lang="d">
+@align(1)
+struct Foo { }
+
+@extern('C')
+int foo();
+
+@pure
+int foo() { }
+
+@nothrow
+int foo() { }
+
+@shared
+int x;
+
+@__gshared
+int x;
+
+@__thread
+int x;
+
+@final
+class Foo { }
+
+@abstract
+class Foo { }
+
+class Foo {
+
+  @deprecated
+  void foo() { }
+}
+
+class Foo {
+
+  @override
+  void foo() { }
+}
+</syntaxhighlight>
+
+And also for new things:
+
+<syntaxhighlight lang="d">
+class Foo {
+
+  @property
+  int x() { ... }
+
+  @property
+  int x(int value) { ... }
+
+}
+</syntaxhighlight>
+
+== Compiler Implementation ==
+At a first stange, the compiler will parse the annotations and attach them to declarations. In the semantic pass the annotations are inspected and actions are taken. For example if the @override property is found in a function, a check is made to see if it indeed overrides a base function. If @deprecated is found and deprecated features are not allowed, a warning/error is issued.
+ 
+If the annotation is not recognized by the compiler, an error happens (much like what happens with __traits(somehthing, foo) now: if the first argument is not recognized, it is an error). Also at this first stage, a user cannot define new annotations. A user cannot inspect annotations. The first stage will just help introducing annotations, making the language easier to evolve (no need to introduce new keywords for every new functionality). A future DIP should define how annotations evolve from this point once they have been implemented.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

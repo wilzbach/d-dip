@@ -1,0 +1,312 @@
+{| class="wikitable" 
+!Title: 
+!'''making export an attribute''' 
+|-
+|DIP: 
+|45 
+|- 
+|Version: 
+|2 
+|- 
+|Status: 
+|Draft 
+|- 
+|Created: 
+|2013-08-27
+|- 
+|Last Modified: 
+|2013-11-09
+|- 
+|Author: 
+|Benjamin Thaut, Martin Nowak, David Nadlinger
+|- 
+|Links: 
+|
+*http://forum.dlang.org/post/5112D61B.5010905@digitalmars.com
+*http://forum.dlang.org/post/kvhu2c$2ikq$1@digitalmars.com
+*http://d.puremagic.com/issues/show_bug.cgi?id=9816 
+|}
+
+==Abstract==
+
+Export and its behavior need to be changed in serveral ways to make it
+work on Windows and allow better code generation for other
+plattforms. The Rationale section explains the problems and shows how
+this DIP solves them.
+
+==Description==
+
+* The '''export''' protection level should be turned into a '''export''' attribute.
+* If a module contains a single symbol annotated with the 'export' attribute all compiler internal symbols of this module should recieve the 'export' attribute too (e.g. module info). 
+* If a class is annotated with the 'export' attribute, all of its public and protected functions and members will automatically recieve the 'export' attribute. Also all its hidden compiler specific symbols will recieve the 'export' attribute. 
+* There should be only one meaning of 'export'. 
+* It should be possible to access TLS variables across DLL / shared library boundaries. 
+* On *nix systems default symbol visibility is changed to hidden, and only symbols marked with export become visible.
+
+==Rationale==
+
+===Turning export into an attribute===
+
+Currently '''export''' is a protection level, the highest level of
+visibility actually. This however conflicts with the need to export
+'protected' symbols.  Consider a Base class in a shared library.
+
+<syntaxhighlight lang=D> module sharedLib;
+
+class Base { 
+  protected final void doSomething() { ... } 
+}
+</syntaxhighlight>
+
+
+<syntaxhighlight lang=D> module executable; import sharedLib;
+
+class Derived : Base { 
+  public void func() 
+  { 
+    doSomething(); 
+  } 
+}
+</syntaxhighlight>
+
+In the above example 'doSomething' should only be visible to derived
+classes but it still needs to be exportable from a shared library.
+Therefor '''export''' should become a normal attribute which behaves
+orthogonal to protection.
+
+===Implicitly exporting compiler internal symbols===
+
+All compiler internal symbols need to be treated as exported if using
+an exported symbol might implicitly reference them to avoid link
+errors.  The most prominent example is the ModuleInfo which needs
+linkage if the module has a ''static this()''.
+
+===export attribute inference===
+
+Currently export has to be specified in a lot of places to export all
+neccessary functions and data symbols. Export should be transitive in
+such a sense that it only needs to be specified once in a module to
+export all of its functions / data members including classes and their
+members / data symbols. Consider the following example:
+
+<syntaxhighlight lang="D">
+module sharedLib;
+
+export:
+
+__gshared int g_Var;             // should be exported
+
+void globalFunc() { ... }        // should be exported
+
+class A                          // compiler internal members should be exported 
+{ 
+  private: 
+    int m_a;
+
+    static int s_b;              // should not be exported
+
+    void internalFunc() { ... }  // should not be exported
+
+  protected: 
+    void interalFunc2() { ... }  // should be exported
+
+  public: 
+    class Inner                  // compiler internal members should be exported
+    { 
+      static s_inner;            // should be exported
+
+      void innerMethod() { ... } // should be exported 
+    }
+
+    void method() { ... }        // should be exported 
+}
+
+private class C                  // should not be exported 
+{ 
+  public void method() {... }    // should not be exported 
+} 
+</syntaxhighlight>
+
+===A single meaning of '''export'''===
+
+The classical solution to handle dllexport/dllimport attributes on
+Windows is to define a macro that depending on the current build
+setting expands to __declspec(dllexport) or to __declspec(dllimport).
+This complicates the build setup and means that object files for a
+static library can't be mixed well with object files for a DLL.
+Instead we propose that exported data definitions are accompanied with
+an _imp_ pointer and always accessed through them. See the
+implementation detail section for how this will work for
+[[#Data_Symbols|data symbols]] and [[#Function_Symbols|function
+symbols]]. That way a compiled object file can be used for a DLL or a
+static library. And vice versa an object file can be linked against an
+import library or a static library.
+
+===Access TLS variables===
+
+Currently it is not possible to access TLS variables across shared
+library boundaries on Windows. This should be implemented (see
+[[#TLS_variables|implementation details]] for a proposal).
+
+===Change symbol visibility on *nix systems===
+
+When building shared libraries on *nix systems all symbols are visible
+by default. This is a main reason for the performance impact of PIC
+because every data access and every function call go through the GOT
+or PLT indirection.  It also leads to long loading time because an
+excessive number of relocations have to be processed. 
+Making all symbols hidden by default significantly reduces the size of the dynamic symbol table (faster
+lookup and smaller libraries).  See http://gcc.gnu.org/wiki/Visibility
+and http://people.redhat.com/drepper/dsohowto.pdf for more details.
+
+Also making every symbol accessible can inadvertently cause ABI
+dependencies making it harder to maintain libraries.
+
+Furthermore, hiding functions by default enables much more aggressive compiler optimizations, to the benefit of both executable performance and code size. Some examples for this are elision of completely inlined functions, optimization of function signatures/calling conventions, partial inlining/constant propagation, … Some of these optimization opportunities also positively affect compile times, as evidenced by an experimental LDC patch (see [https://github.com/ldc-developers/ldc/pull/483 LDC #483], although LTO is required to fully exploit this).
+
+==Implementation Details==
+
+=== Windows ===
+
+==== Data Symbols ====
+
+For data symbols the 'export' attribute always means 'dllexport' when
+defining a symbol and 'dllimport' when accessing a symbol.  That is
+accessing an exported variable is done through dereferencing it's
+corresponding import symbols.  When defining an exported variable the
+compiler will emit a corresponding import symbol that is initialized
+with address of the variable.  The import symbol can be located in the
+read only data segment.  The mangling of the import symbol consists of
+the '_imp_'/'__imp_' (Win32/Win64) prefix followed by the mangled name
+of the variable.  Import symbols itself are not exported.  When an
+exported variable of the same module is accessed the compiler might
+avoid the indirection and perform a direct access.
+
+<syntaxhighlight lang=D>
+module a;
+
+export __gshared int var = 5;
+__gshared int* _imp__D1a3vari = &var; // import symbol generated by the compiler
+
+void func()
+{
+   var = 3; // accesses var directly, because in the same module
+}
+</syntaxhighlight>
+
+
+<syntaxhighlight lang=D>
+module b;
+import a;
+
+void bar()
+{
+    var = 5; // accesses through indirection because var is marked as export and in a different module
+    // *_imp__D1a3vari = 5; // code generated by the compiler
+}
+</syntaxhighlight>
+
+==== Function Symbols ====
+
+For function symbols the 'export' attribute always means 'dllexport'
+when defining a function and 'dllimport' when calling a function.
+Calling an exported function is always done through the original symbol.
+In an import library the original symbol is redifined as trampoline that simply
+dereferences the _imp_ pointer to the DLL function.
+Thus calling an exported function will be compatible with both import
+libraries and static libraries, in the later case without indirection.
+
+<syntaxhighlight lang=D>
+module a;
+
+export void func()
+{
+}
+
+void bar()
+{
+    func(); // call func; // directly
+}
+</syntaxhighlight>
+
+
+<syntaxhighlight lang=D>
+module b;
+import a;
+
+void bar()
+{
+    func(); // call func; // through trampoline
+}
+
+// definitions in the import library generated by implib
+void func()
+{
+    asm
+    {
+        naked;
+        jmp [_imp_func];
+    }
+}
+void function() _imp_func = &func; // filled at runtime with the DLL address of func
+</syntaxhighlight>
+
+==== TLS variables ====
+
+For each exported TLS variable the compiler should generate a function
+that returns the address of the TLS variable in the current
+thread. These internal methods should have some kind of unified prefix
+to mark them as TLS import helpers. I propose "__tlsstub_". These
+internal methods are also exported.  So when accessing an exported TLS
+variable the compiler will insert a call to
+'_imp__D1a15__tlsstub_g_tlsFZPi' instead.  As an optimization accesses
+to exported TLS variables within the same module can be performed
+directly.
+
+<syntaxhighlight lang=D>
+module a;
+
+export int g_tls = 5; // thread local storage
+
+export int* __tlsstub__g_tls() // generated by the compiler
+{
+    return &g_tls;
+}
+alias _imp___tlsstub__g_tls = __tlsstub__g_tls; // also generated by the compiler
+
+void func()
+{
+    g_tls = 3; // direct access because marked as export and in the same module
+}
+</syntaxhighlight>
+
+
+<syntaxhighlight lang=D>
+module b;
+import a;
+
+void bar()
+{
+    g_tls = 10; // access through _imp___tlsstub__g_tls function because marked as export and in a different module
+    // *_imp___tlsstub__g_tls() = 10; // code generated by the compiler
+}
+</syntaxhighlight>
+
+=== *nix ===
+
+On *nix systems the default symbols visibility should be changed to
+hidden, i.e. -fvisibility=hidden argument of gcc.  Only symbols marked
+with '''export''' should get the attribute visible.
+
+This is trivial to implement on GDC and LDC.
+
+=== Linking archives into shared libraries ===
+
+When linking archives into shared libraries the exported symbols from the archive will also be exported from the resulting shared library. Most often this is unwanted and may lead to inadvertent ABI dependencies.
+To accomplish this we'll provide a tool that strips export attributes from archives.
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

@@ -1,0 +1,70 @@
+{| class="wikitable"
+!Title:
+!'''Phobos additions'''
+|-
+|DIP:
+|80
+|-
+|Version:
+|1.0
+|-
+|Status:
+|'''Draft'''
+|-
+|Created:
+|2015-05-28
+|-
+|Last Modified:
+|2015-06-07
+|-
+|Author:
+|Robert burner Schadek
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+Phobos is awesome in most regards.
+But some functionally could be added.
+
+== Rationale ==
+Make phobos even more useful by adding modules that help in daily life.
+
+== Description ==
+
+Libraries that would bring phobos a long way there would be: 
+
+{| class="wikitable"
+!Title:
+!''' Description '''
+|-
+| boost::unit
+| allows you to calculate with SI units for example (http://code.dlang.org/packages/quantities)
+|-
+| blas
+| std.blas [http://forum.dlang.org/post/nilhvnqbsgqhxdshpqfl@forum.dlang.org forum annonce]
+|-
+| multidimensional ranges
+| st.ndslice [https://github.com/D-Programming-Language/phobos/pull/3397 #3397]
+|-
+| allocator
+|
+|-
+| std container
+| map, set ...
+|-
+| serialization
+| something that takes structes/classes and writes json,xml, ... and the other way around
+|-
+| xml replacement
+| 
+|-
+| json replacement
+|
+|-
+| SafeInt!T
+| there is checkedint in druntime but no high level wrapper
+|}
+
+[[Category: DIP]]

@@ -1,0 +1,49 @@
+{| class="wikitable"
+!Title:
+!'''Deprecated attribute consistency'''
+|-
+|DIP:
+|86
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2016-01-13
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Brian Schott
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+Currently the version of "deprecated" that takes a string literal describing the deprecation can be used as an attribute, but not a storage class. The version that does not take a description can be used as both. This DIP will make the use of the "deprecated" attribute/storage class more consistent.
+
+== Rationale ==
+It is confusing to the users of D that the following code compiles:
+<syntaxhighlight lang="D">
+deprecated i = 10;
+</syntaxhighlight>
+but the following code does not:
+<syntaxhighlight lang="D">
+deprecated("This field will be removed in March 2017") i = 10;
+</syntaxhighlight>
+
+== Grammar Change ==
+"deprecated" will be removed from the "StorageClass" grammar and replaced with "DeprecatedAttribute".
+
+== Backwards Compatability ==
+Because this change will allow previously invalid code to be valid, no old code will need to be upgraded.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

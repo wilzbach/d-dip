@@ -1,0 +1,82 @@
+{| class="wikitable"
+!Title:	
+!'''Import path binding'''
+|-
+|DIP:	
+|13
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2011-10-18
+|-
+|Last Modified:
+|2011-10-18
+|-
+|Author:
+|Martin Nowak
+|-
+|Links:
+|[http://prowiki.org/wiki4d/wiki.cgi?LanguageDevel/DIPs/DIP11 Split of from DIP11]
+|}
+
+== Abstract == 
+Allow to use specific import paths for selected modules or packages.
+
+== Rationale ==
+The proposal increases the flexibility of directory layouts w.r.t. the package system. It decouples the package hierarchy from a fixed directory layout. It is a requirement to do virtual imports based on URLs.
+
+== Description ==
+The feature is implemented by augmenting the syntax for imports. Currently, the D import path is specified either via command line through the -I switch, or via the dmd.conf (dmd.ini) file.
+
+The path given via the command line or configuration file will now be of the form:
+
+   [module.or.package=]<path>
+
+When the ("module.or.package=") part is given this is referred to as a qualified import path.
+
+== Usage ==
+A qualified import path specifies that the given path will ONLY be used if the module being imported begins with or is exactly the given module. The 'path' takes the place of the module or package path when finding a physical resource. The package qualifier must be exact, for example, if a path given is
+
+    -Ia.b=/home/ab
+
+and someone imports a.bc, this does not match.
+If a modules matches a qualified import path and the given import cannot be found using that path, the compiler generates an error. This is to prevent cases where the module is found in an alternative path.
+
+If path is a symlink it will be resolved as is done for unqualified import paths.
+
+== Examples ==
+    module a;
+    
+    import foo.bar;
+    
+    void main()
+    {
+    }
+	
+    dmd a.d -Ifoo=/path/D/foo           => /path/D/foo/bar.{d|di} is read as module foo.bar.
+    dmd a.d -Ifoo.bar=/path/D/foobar.d  => /path/D/foobar.d is read as module foo.bar.
+    dmd a.d -Ifoo.baz=/path/foo/baz     => bar.{d|di} is not being searched in /path/foo/baz
+    dmd a.d -Ifoo.bar=/path/src.ext     => error src.ext is not a d source file
+    dmd a.d -Ifoo.bar=/path/null/bar.d  => error source file does not exist
+    dmd a.d -Ifoo=/path/foo             => error if /path/foo/bar.{d|di} is not a file
+
+== Hijack Prevention ==
+The compiler will produce an error if you specify two package qualifiers where one is the prefix of another. For example:
+
+    -Ia.b=/home/ab
+    -Ia=/home/a
+
+This is to prevent ambiguity of where a certain module exists. It is still possible to define multiple import paths for a module if the package qualifier is not used. In this case, the behavior is the same as the current compiler.
+
+== Impact ==
+This does not conflict with the current import path spec. It will break assumptions on having a corresponding directory layout for the package hierarchy.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

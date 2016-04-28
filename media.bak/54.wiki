@@ -1,0 +1,138 @@
+{| class="wikitable"
+!Title:
+!'''Revamp of Phobos tuple types'''
+|-
+|DIP:
+|54
+|-
+|Version:
+|2
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-12-22
+|-
+|Last Modified:
+|2013-12-22
+|-
+|Author:
+|Михаил Сташун (Dicebot)
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+This DIP formalizes group of proposals targeted to improve existing situation with "tuple" library types as well as matching documentation to make it more straightforward and easy to learn. It is based on several newsgroup topics and private e-mail conversation and describes least bad compromised of all possible bad solutions as it is seen by DIP author.
+
+== Rationale ==
+Current naming is frequent cause of questions and misunderstanding, especially when coupled with documentation available on dlang.org - even some experienced D developers seem to be confused by actual semantics of entities called "tuples" within different contexts. Making it as explicit as possible will both improve learning curve and remove common terminology issue.
+
+There is also common desire for similar but non-expanding behavior to allow algorithms on multiple lists.
+
+As those issues affect same modules/symbols it is pragmatical to make relevant changes at once two avoid twice as long deprecation procedure.
+
+== Description ==
+
+=== Origins of the issue ===
+
+D tuples are derivatives from implementation of variadic templates. Those behavior does not match one other language users may expect from entity called "tuple" and large amount of special cases involved often makes people confused about its exact semantics. However, this is a very core part of the language right now, widely used both in libraries and user code in variety of forms; changing it will result in uncontrollable breakage. Fixing Phobos types derived from it will, however, partially reduce the issue simply by making the relation clear and reducing amount of entities to consider.
+
+Currently there are two public symbols in that domain : `std.typecons.Tuple` and `std.typetuple.TypeTuple`. Former partially emulates behavior of tuples in their languages by wrapping built-in ones into the struct and is mostly OK. Latter, however, is very confusing as it has nothing to do with neither normal tuples nor types. It is historical name coming from C++ origins of the concept where template arguments where mostly limited to types. In D it is much more capable and this name only causes confusion.
+
+There is also a private `std.typetuple.Pack` which is similar to current `std.typetuple.Tuple` but does not auto-expand. It is a tool absolutely necessary for more complex algorithms used in metaprogramming and is frequently re-invented in user libraries / projects. However, simply making it public will add even more confusion about difference between all those types.
+
+=== Terminology ===
+
+Right now "tuple" does not have a strict meaning. It is sometimes used in documentation to refer to template argument lists and sometimes to behavior emulated to `std.typecons.Tuple`. Sometimes to refer to specific subset of observable functionality like "expression tuple".
+
+This proposal implies reserving name "tuple" exclusively to `std.typecons.Tuple` and refer to built-in feature as "template argument list" or simply "list" where it is unambiguous because of context. For example, "type list" is acceptable shortcut to"template argument list containing only types". Non-expanding version should be called "template argument pack" or just "pack".
+
+=== Duplication ===
+
+Originally this DIP has proposed to remove non-expanding version completely and re-define everything in terms of template argument pack. However, this has met several objection including one important concern about how it will break existing template constraints using current std.typetuple algorithm versions. This is second iteration which provides both as a compromise while trying to make the distinction as obvious as possible.
+
+=== Proposal ===
+
+# Create a module `std.tuple` that contains Tuple (now in typecons). `std.typecons.Tuple` will continue to work as an alias for `std.tuple.Tuple`.
+# Create a module `std.meta.list` that introduces new entity, `TemplateArgumentList`, which behaves similar to current `TypeTuple` 
+# Create a module `std.meta.pack` that introduces new entity, `TemplateArgumentPack`, which behave similar to current `TypeTuple` but do not auto-expand. It can be called on `.expand` explicitly to get old behavior (same as Tuple)
+# All documentation on dlang.org is stripped from mention of `TypeTuple` (replaced with `TemplateArgumentList`). tuple / Tuple is removed too unless it refers to `std.tuple.Tuple`
+# http://dlang.org/tuple is completely re-written to given full big picture of this part of language / Phobos
+# Algorithms from `std.typetuple` receive additional overload to accept non-expanding template argument lists and form base for `std.meta.` package (exact module separation being discussed as part of pull request review)
+# `std.typetuple` goes through deprecation process with suggestion to port user code to `std.meta.list`, page on dlang.org is created to be referred to that explains how transition can be done and rationale for that
+# `std.typecons.Tuple` symbol goes through deprecation process
+
+=== Auto-expansion explained ===
+
+When this DIP mentions auto-expanding behavior, this is meant:
+
+<syntaxhighlight lang="D">
+// current Phobos
+import std.typetuple;
+
+template Print0(T...)
+{
+    pragma(msg, T[0]);
+}
+
+alias _ = Print0!( TypeTuple!(int, double) );
+
+// prints "int"
+</syntaxhighlight>
+
+Without expansion it will behave differently:
+
+<syntaxhighlight lang="D">
+// imaginary future Phobos
+import std.meta.pack;
+
+template Print0(T...)
+{
+    pragma(msg, T[0]);
+}
+
+alias _ = Print0!( TemplateArgumentPack!(int, double) );
+
+// prints "TemplateArgumentPack!(int, double)"
+</syntaxhighlight>
+
+If one considers template argument list metaprogramming twin of range, packs allow to express concepts such as "range of ranges" with any arbitrary nesting. Existing auto-expanding list gets flattened into single argument list when passed to actual template.
+
+An alternative approach that is sometimes proposed is to nest templates:
+
+<syntaxhighlight lang="D">
+template ArgList1(T1...)
+{
+   template ArgList2(T2...)
+   {
+       // actual algorithm
+   }
+}
+</syntaxhighlight>
+
+However this does not allow variadic argument list length and is not as similar to normal range algorithm function signature.
+
+=== FAQ ===
+
+===== Why that weird long name, `TemplateArgumentList` =====
+'''A''': Because it is exactly what it is. This name makes it clear that one may expect from this thing behavior similar to http://dlang.org/template.html#TemplateArgumentList (also http://dlang.org/template.html#TemplateParameterList) and there is no other thing in language that matches it.
+
+===== Why not call it `AliasList`? =====
+'''A''': Because it is as misleading as `TypeList` (it is not limited to aliases) and does not tell a thing about semantics of the entity
+
+===== Why not call it `Sequence` / `Seq` =====
+'''A''': Because it is just a neutral word with no obvious semantics. It is convenient wrapper for those who already know the thing but does not help newbies. `list` is better as a shortcut because it is already part of the matching language term
+
+===== I hate to type it! =====
+'''A''': import std.meta.list : MyAwesomeShortAlias = TemplateArgumentList
+
+===== Why do all at once? Can't we separate it into smaller chunks? =====
+'''A''': We can but that will make transition process longer and force users to adjust same parts of code several times instead of making a single change. It is much more efficient to make a single big step.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

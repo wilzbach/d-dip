@@ -1,0 +1,289 @@
+{| class="wikitable"
+!Title:	
+!'''Delegates'''
+|-
+|DIP:
+|30
+|-
+|Version:
+|2
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-15-27
+|-
+|Last Modified:
+|2013-15-27
+|-
+|Author:
+|Amaury SÉCHET
+|-
+|Links:
+| [[DIP27]], [[DIP28]]
+|}
+
+== Abstract ==
+This DIP is the last of 3. It intend to define delegates in D. Just like DIP27 and DIP28 it intend to be simple and avoid special cases, by redefining delegate in a more general way : an struct composed of a function pointer and a first argument. This allow us to handle method, closure and UFCS as delegate introducing only one entity in the language.
+
+== Rationale ==
+
+Current delegate definition suffer several problems. It don't ensure transitivity of type qualifiers :
+<syntaxhighlight lang="d">
+struct Foo {
+	void delegate() dg;
+	
+	this(immutable void delegate() dg) immutable {
+		this.dg = dg;
+	}
+}
+
+void main() {
+	int a;
+	
+	auto f = Foo({
+		a++;
+	});
+	
+	f.dg();
+	
+	import std.stdio;
+	writeln(a); // Print 1
+}
+</syntaxhighlight>
+
+This problem, just as the inability to express many construct as delegate come from the fact the the delegate's hidden argument isn't typed properly.
+
+== Fully typed delegates ==
+
+Delegate's context is assumed to be of type void* . However, it can be specified as a type after the parameter list as follow :
+<syntaxhighlight lang="d">
+void delegate() // delegate with an implicit parameter of type void*
+void delegate() uint // delegate with a parameter of type uint
+</syntaxhighlight>
+
+function and delegate keyword do not bind to the parameter type. It is possible to resolve this using an alias, but it should be rare enough to be a problem.
+<syntaxhighlight lang="d">
+void delegate() void* function() // a function that return a delegate with a void* as context.
+
+alias fn = void* function();
+void delegate() fn // a delegate that uses a function as context.
+</syntaxhighlight>
+
+When the type of the context is void*, the type qualifier can be specified alone :
+<syntaxhighlight lang="d">
+static assert(is(void delegate() immutable == void delegate() immutable(void*))); // Pass
+</syntaxhighlight>
+
+As the context is an argument, it can be ref. All delegates with ref, pointer, interface or class as context type can implicitly cast to a delegate with void* as context type (granted type qualifier matches).
+<syntaxhighlight lang="d">
+void delegate() uint* a;
+void delegate() b = a; // OK
+
+void delegate() uint c;
+void delegate() d = c; // Error
+
+void delegate() immutable(uint)* e;
+void delegate() f = e; // Error
+void delegate() immutable g = e; // OK
+
+void delegate() ref uint h;
+void delegate() i = h; // OK
+</syntaxhighlight>
+
+== Method as delegates ==
+
+Method are delegates. As simple as this.
+
+<syntaxhighlight lang="d">
+struct Foo {
+   void bar() {}
+}
+
+Foo foo;
+
+class Qux {
+    uint buzz() immutable {}
+}
+
+Qux qux;
+
+static assert(is(typeof(foo.bar) == void delegate() ref Foo)); // Pass
+static assert(is(typeof(qux.buzz == uint delegate() immutable(Qux))); // Pass
+static assert(is(typeof(foo.bar) : void delegate())); // Pass
+static assert(is(typeof(qux.buzz : uint delegate() immutable)); // Pass
+</syntaxhighlight>
+
+== Closures as delegates ==
+
+Closures are delegates with a pointer on a tuple as context. As D tuples are not expressible in D, no sample code on that one. pure have the same semantic as for function and is not saying anything about the context anymore.
+
+<syntaxhighlight lang="d">
+void fun() {
+    uint a, b;
+    pure uint foo() {
+        return a + b;
+    }
+
+    static assert(is(typeof(foo) : uint delegate()); // Pass
+    static assert(is(typeof(foo) : uint delegate() immutable); // Fail
+    static assert(is(typeof(foo) : uint delegate() pure); // Pass
+
+    immutable uint c, d;
+    uint bar() immutable {
+        // return a + b; // Error, context is immutable.
+        return d + d;
+    }
+
+    static assert(is(typeof(bar) : uint delegate()); // Fail
+    static assert(is(typeof(bar) : uint delegate() immutable); // Pass
+    static assert(is(typeof(bar) : uint delegate() pure); // Fail, bar isn't defined as pure (but could have been).
+}
+</syntaxhighlight>
+
+== UFCS as delegates ==
+
+expression.funName now create a delegate. If the first parameter is ref, a pointer, an interface or a class, thing just goes simply.
+<syntaxhighlight lang="d">
+void foo(ref uint a) {}
+
+uint a;
+
+void delegate() dg = a.foo; // OK
+static assert(typeof(a.foo) == void delegate() ref uint); // Pass
+</syntaxhighlight>
+
+If the first parameter is a value type, then an accordingly typed delegate is created :
+<syntaxhighlight lang="d">
+void bar(uint a) {}
+
+uint a;
+
+void delegate() gd = a.bar // Fail
+void delegate() uint valueDg = a.bar // OK
+static assert(typeof(a.foo) == void delegate() uint); // Pass
+</syntaxhighlight>
+
+The created delegate is an rvalue. Usual copy mechanism apply, this is especially important for struct defining a postblit :
+<syntaxhighlight lang="d">
+struct Foo {
+    this(this) {
+        writeln("postblit !");
+    }
+}
+
+void bar(Foo f) {}
+
+Foo().bar(); // No postblit, only rvalues.
+
+Foo f;
+f.bar(); // postblit.
+auto dg = f.bar; // postblit !
+dg(); // postblit !
+</syntaxhighlight>
+
+No special rule here, the postblit is called when creating an rvalue from an lvalue.
+
+== Optional parentheses ==
+
+Optional are defined as for first class function, whatever those rules are. No exception.
+
+== Type qualifiers ==
+
+In order to ensure transitivity, delegate type qualifier propagate to context :
+<syntaxhighlight lang="d">
+static assert(is(const void delegate() == const void delegate() const)); // Pass
+static assert(is(void delegate() const == const void delegate() const)); // Fail
+static assert(is(void delegate() const : const void delegate() const)); // Pass
+</syntaxhighlight>
+
+Type qualifier propagate the regular way :
+<syntaxhighlight lang="d">
+struct Foo {
+    void delegate() dg;
+}
+
+const(Foo) f;
+static assert(is(typeof(foo.dg) == const void delegate())); // Pass
+</syntaxhighlight>
+
+It means that a delegate can mutate data when it is const ! Hopefully, it is ensured that no immutable data are mutated. The delegate can only mutate mutable data :
+<syntaxhighlight lang="d">
+class Foo {
+    uint data;
+    void delegate() dg;
+
+    this(inout void delegate() dg) inout {
+        this.dg = dg;
+    }
+}
+
+void callDg(const Foo f) {
+    f.dg();
+    writeln(f.data);
+}
+
+Foo f;
+f = new Foo({
+    f.a++;
+});
+
+callDg(f); // Print 1. f is modified using the delegate.
+
+immutable g;
+g = new immutable(Foo)({
+    g.a++;  // Error, g.a is immutable.
+});
+</syntaxhighlight>
+
+To usual rules concerning implicit qualifier cast apply :
+<syntaxhighlight lang="d">
+void delegate() m;
+void delegate() const c;
+void delegate() immutable i;
+void delegate() inout w;
+
+c = m; // OK
+m = c; // Error
+i = m; // Error
+m = i; // Error
+c = i; // OK
+i = c; // Error
+w = m; // Error
+w = c; // Error
+w = i; // Error
+m = w; // Error
+c = w; // OK
+i = w; // Error
+</syntaxhighlight>
+
+As the delegate itself is passed by value, first level type qualifier can be dropped :
+<syntaxhighlight lang="d">
+const void delegate() a;
+void delegate() const b = a; // OK
+const void delegate() c = b; // OK
+void delegate() d = b; // Error, can't convert from const to mutable.
+</syntaxhighlight>
+
+
+It may sound like a good idea to allow casting down from immutable to const and const to mutable, as the delegate won't modify immutable data anyway, however, this isn't possible as it'd be impossible to ensure proper copy and destruction mechanism for value parameters.
+
+== ABI ==
+
+All function and methods uses the first argument as context (frame pointer, UFCS subject or this parameter).
+
+The delegate is formed of a struct. The first element is the function pointer, then the context, as offset are constant for all delegates that way.
+
+Function pointer of the delegate can be accessed via __funptr . It is an immutable first class function. Accessing this is field isn't safe as the type of the first parameter can have been altered in a non covariant way. The name is scary for the same reason. This shouldn't be used, except for debugging, runtime or educational purpose.
+
+The context is provided via __context . The type depend on the delegate. As for __funptr, accessing this is unsafe and the name is scary.
+
+== Conclusion ==
+
+This DIP propose a unified view of many different languages construct via delegates. It solve issues with the current design while simplifying D overall. Coupled with DIP27, it dramatically simplify the situation of callable object in D, which is now unnecessary complex (and have hole in it).
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

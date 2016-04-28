@@ -1,0 +1,141 @@
+{| class="wikitable"
+!Title:
+!'''Region Based Memory Allocation'''
+|-
+|DIP:
+|46
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-08-28
+|-
+|Last Modified:
+|2013-08-28
+|-
+|Language:
+|D2
+|-
+|Breaks:
+|Nothing (extension)
+|-
+|Author:
+|Walter Bright
+|-
+|Links:
+|}
+
+
+== Rationale ==
+
+Stateless programming is a popular technique for encapsulation. D currently supports
+it marvelously with the 'pure' function attribute:
+
+<syntaxhighlight lang="d">
+T statelessOp(const args) pure;
+</syntaxhighlight>
+
+Under the hood, however, the GC is not stateless. Allocated memory may be left over
+after the call, and it may never get collected. Adding precise GC will not fix this
+100%. What's needed is a way to guarantee that all memory allocated by statelessOp()
+is released.
+
+== Description ==
+
+One way to do this is by a region allocator. Create a new region at the start of
+statelessOp(), and throw the reqion away at the end. All allocations during that
+call will have been allocated within that region.
+
+Fortunately, druntime's GC implementation is all controlled by a proxy, a global
+variable _gc. All GC operations are member functions of _gc. This means we can,
+instead of using a __gshared _gc, key off of a thread local _gctls. This will default
+to being _gc, and so the default behavior will be as now.
+
+A user can then:
+
+<syntaxhighlight lang="d">
+gc_push();
+</syntaxhighlight>
+
+which will then create a new instance of the GC and set _gctls to it.
+All calls to the GC in the current
+thread will now go to the new instance. When done,
+
+<syntaxhighlight lang="d">
+gc_pop();
+</syntaxhighlight>
+
+will throw away that GC implementation and all the memory it allocated, and
+revert to the previous value of _gctls.
+
+Some observations:
+
+1. statelessOp() will have to be nothrow. This is because throw allocates GC memory
+for the exception, and all such memory cannot survive gc_pop().
+
+2. statelessOp() cannot spawn a new thread. Of course, it can't anyway because it is pure.
+
+3. statelessOp() may not cast memory to shared.
+
+4. The new region GC instance will be thread local, meaning it no longer has to acquire/release
+locks, and it doesn't need to stop other threads when doing a collection cycle.
+The thread running the region GC will still have to be stopped when the global GC is collecting,
+as its stack and locals may still refer to global GC data.
+
+5. Pairs of gc_push()/gc_pop() can be nested.
+
+6. The default 'roots' of the new instance will be the current thread's stack. Adding other
+roots will be the responsibility of the caller. If the caller gets this wrong, undefined
+behavior will result. Consider the following:
+
+<syntaxhighlight lang="d">
+auto s = toStringz(msg); // return value kept in register, e.g. EDI
+gc_push();
+statelessOp(s); // passes s in EAX, trashes EDI
+gc_pop();
+</syntaxhighlight>
+
+and statelessOp stores the value in the thread local GC only:
+
+<syntaxhighlight lang="d">
+void statelessOp(char* s)
+{
+    char** ps = gc_malloc(s.sizeof);
+    *ps = s;
+    // now there is no more reference to s on the stack or in register
+    // but access through *ps is possible
+}
+</syntaxhighlight>
+
+The same can happen right now with an external C function if it changes the argument on the stack.
+
+
+7. It will be up to the user to ensure that when gc_pop() is called, no further references
+to that GC instance's allocations will be made.
+
+8. The return value, if it as allocated in the region, will have to be deep-copied.
+
+9. statelessOp() will have to be expensive enough to justify the time spent creating/destroying
+a region.
+
+A further observation is that class GC has virtual functions in it. This opens up the
+possibility of doing a gc_push() with a different GC. Two possibilities come to mind:
+
+1. Allocate-but-never-free, like DMD does. This would be very fast.
+
+2. Assert-on-any-allocation, used for code that wants to be "nogc". This avoids the complexity
+of adding a "nogc" attribute to D. More discussion of "nogc":
+https://github.com/D-Programming-Language/druntime/pull/493 
+
+== Acknowledgments ==
+
+Thanks to Rainer Schuetze for his helpful comments on this.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

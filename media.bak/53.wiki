@@ -1,0 +1,192 @@
+{| class="wikitable"
+!Title:
+!'''Qualified constructor revisited'''
+|-
+|DIP:
+|53
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-12-17
+|-
+|Last Modified:
+|2013-12-17
+|-
+|Author:
+|Hara Kenji
+|}
+
+== Abstract ==
+
+This DIP redesigns qualified constructor definitions.
+
+== Motivation ==
+
+From 2.063, qualified constructor is implemented, and unique constructor concept is added.
+: https://github.com/D-Programming-Language/dmd/pull/1726
+
+However, current definition is very complex and hard to understand.
+: http://dlang.org/class#constructors<br/>
+: > "Constructors can be overloaded with different attributes." ...
+
+The issues in current unique constructor definition are:
+* Always requires pure attribute.
+* Cannot check whether a constructor is really unique or not, by only looking the signature.
+*: You also need see the types of object fields, and should check they don't appear in the constructor parameters.
+* Constructor qualifier (inout, const, etc) is not directly related to the unique constructor concept.
+
+This situation should be improved.
+
+== Description ==
+
+In the ideal world, objects would have only one of the two qualifiers - mutable or <code>immutable</code>.
+So, there would be just two constructors:
+* "mutable constructor" would support creating mutable object.
+* "immutable constructor" would support creating immutable object.
+
+However, in actual D code, there are two wildcard qualifiers, <code>const</code> and <code>inout</code>.
+Therefore, we would also need additional two ways to:
+* construct inout object from inout arguments, inside inout function.
+* construct arbitrary qualified object from arbitrary arguments.
+For those requests, provide additional two concepts, "inout constructor" and "const constructor".
+
+=== Mutable Constructor ===
+
+If a constructor is unqualified, it will be used for mutable object construction.
+
+ struct S {
+     <strong>this(</strong>int<strong>)</strong> { ... }
+ }
+ void main() {
+     S sm = S(1);
+ }
+
+=== Immutable Constructor ===
+
+If a constructor is qualified with immutable, it will be used for immutable object construction.
+
+ struct S {
+     <strong>this(</strong>int<strong>) immutable</strong> { ... }
+ }
+ void main() {
+     immutable S si = immutable S(1);
+ }
+
+=== Inout Constructor ===
+
+If a constructor is qualified with inout, and has one or more inout parameters, it will become inout constructor.
+
+ struct S {
+     <strong>this(inout</strong> int[] a<strong>) inout</strong> { ... }
+ }
+ void main() {
+     int[] ma;
+     immutable int[] ia;
+ 
+     auto sm = S(ma);            // OK
+     auto si = immutable S(ia);  // OK
+ 
+   //auto sm = immutable S(ma);  // NG
+   //auto si = S(ia);            // NG
+ }
+
+// For classes, zero-arg inout constructor is allowed?
+// --> To reduce confusion, this DIP disallows such definition.
+
+=== Const Constructor ===
+
+If a constructor is qualified with const, it will be used to construct arbitrary qualified objects.
+
+Inside const constuctor, you need to initialize the instance fields by ''Unique Expression'' (See [[DIP49]]).
+
+ struct S {
+     const int[] arr;
+     <strong>this(</strong>int[] a<strong>) const</strong> {
+       //this.arr = a;       // NG
+         this.arr = a.dup;   // OK, array.dup makes unique expression for int[]
+     }
+ }
+
+After construction finished, the generate object will be unique object -
+it means that the object owns no reference to the external state.
+So, it could also be called "unique constructor", based on the concept.
+
+Advantages with respect to the currently implemented definition:
+* <code>pure</code> attribute is not necessary.
+* If a constructor can be used for arbitrary qualified object construction, it is qualified with <code>const</code>.
+
+== Overloading of qualified constructors ==
+
+If mutable constructor is defined,
+* it is always used for mutable object construction.
+* if immutable constructor is not defined, it will be used for const object construction.
+
+If immutable constructor is defined,
+* it is always used for immutable object construction.
+* if mutable constructor is not defined, it will be used for const object construction.
+
+If inout constructor is defined,
+* it is always used for inout object construction.
+* if all other constructors, mutable, immutable, and const, are not defined, it will be used for const object construction.
+
+If const constructor is defined,
+* it is always used for const object construction.
+* if mutable constructor is not deinfed, it will be used for mutable object construction.
+* if immutable constructor is not deinfed, it will be used for immutable object construction.
+* if inout constructor is not deinfed, it will be used for inout object construction.
+
+== Related issues ==
+
+* Inside constructor, the first assignment of a field should be treated as its initialization.
+: This is necessary due to make unique constructor definition simple.
+: [http://d.puremagic.com/issues/show_bug.cgi?id=9665 Issue 9665] - Structure constant members can not be initialized if have opAssign
+: --> Has been fixed in 2.064.
+
+* Requires inout + const qualifier
+: Currently, const type qualifier always overrides inout.
+: But the behavior will sometimes accidentally hurt inout constructor concept.
+:
+ struct Rebindable(T) {
+     this(inout T initializer) inout { ... }
+     // Intend to define inout constructor.
+ }
+ Rebindable!(const Object) r;
+ // Currently inout(const(int)) is shrinked to const(int),
+ // so the constructor would loose inout parameter, and
+ // will cause "inout constructor should have one or more inout parameters" error.
+:
+: To resolve the issue, I think we need to fix issue 6930.
+: [http://d.puremagic.com/issues/show_bug.cgi?id=6930 Issue 6930] - combined type of immutable(T) and inout(T) should be inout(const(T))
+
+== Why 'const' constructor will be called to create arbitrary qualified object? ==
+
+When an object is constructed by <code>const</code> constructor, the object would have either mutable or immutable qualifier.
+And, const method is always callable on both mutable and immutable object.
+
+ struct S {
+     this(int) const { ... }
+ }
+ void main() {
+    // const constructor is callable on constructing mutable object
+    S sm = S(1);
+ 
+    // const constructor is callable on constructing immutable object
+    immutable S si = immutable S(1);
+ }
+
+There's no mutation against widely known "const method" concept.
+
+=== Rationale ===
+
+[[DIP49]] is based on the same concept, and they are designed symmetry right now.
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

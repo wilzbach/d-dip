@@ -1,0 +1,94 @@
+{| class="wikitable"
+!Title:
+!'''Add namespace scopes to support referencing external C++ symbols in C++ namespaces'''
+|-
+|DIP:
+|61
+|-
+|Version:
+|1
+|-
+|Status:
+|Implemented
+|-
+|Created:
+|2014-04-26
+|-
+|Last Modified:
+|2014-04-26
+|-
+|Author:
+|Walter Bright
+|-
+|Links:
+|[[DIP61/Archive]]
+— [http://forum.dlang.org/post/lhi1lt$269h$1@digitalmars.com NG discussion that triggered the DIP]
+— [http://forum.dlang.org/post/ljfue4$11dk$1@digitalmars.com NG announcement and discussion]
+— [http://forum.dlang.org/post/ljjnaa$187r$1@digitalmars.com more NG discussion]
+- [https://github.com/D-Programming-Language/dmd/pull/3517 Pull Request]
+|}
+
+== Abstract ==
+Add ability to reference from D C++ symbols that are in C++ namespaces.
+
+== Rationale ==
+Best practices in C++ code increasingly means putting functions and declarations in namespaces. Currently,
+there is no support in D to call C++ functions in namespaces. The primary issue is that the name mangling
+doesn't match. Need a simple and straightforward method of indicating namespaces.
+
+== Description ==
+A namespace scope creates a scope with a name, and inside that scope all declarations become part of the
+namespace scope. This involves the addition of a small amount of new grammar.
+Compiler changes are expected to be minor. The change is additive and should not impact any existing code.
+
+The namespace is identified by an identifier following the C++ in extern(C++). Nested namespaces can be
+specified using . to separate them.
+
+== Usage ==
+
+<syntaxhighlight lang="d">
+extern (C++, MyNamespace) { int foo(); }
+</syntaxhighlight>
+
+creates a namespace named "MyNamespace". As is currently the case,
+
+<syntaxhighlight lang="d">
+extern (C++) { int foo(); }
+</syntaxhighlight>
+
+does not create a namespace.
+
+The following declarations are all equivalent:
+
+<syntaxhighlight lang="d">
+extern (C++) { extern (C++, N) { extern (C++, M) { int foo(); }}}
+extern (C++, N.M) { int foo(); }
+extern (C++, N) { extern (C++) { extern (C++, M) { int foo(); }}}
+</syntaxhighlight>
+
+Namespaces can be nested. Declarations in the namespace can be accessed without qualification in the enclosing
+scope if there is no ambiguity. Ambiguity issues can be resolved by adding the namespace qualifier:
+
+<syntaxhighlight lang="d">
+extern (C++, N) { int foo(); int bar(); }
+extern (C++, M) { long foo(); }
+
+bar(); // ok
+foo(); // error, ambiguous
+N.foo(); // ok
+N.bar(); // ok
+</syntaxhighlight>
+
+Name lookup rules are the same as for mixin templates.
+
+Unlike C++, namespaces in D will be 'closed' meaning that new declarations cannot be inserted into a namespace after the closing }. C++ Argument Dependent Lookup (aka "Koenig Lookup") will not be supported.
+
+== Grammar Change ==
+ <i>LinkageAttribute</i>:
+     <b>extern</b> <b>(</b> <i>identifier</i> <b>)</b>
+     <b>extern</b> <b>(</b> <i>identifier</i> <b>++</b> <b>)</b>
+     <b>extern</b> <b>(</b> <i>identifier</i> <b>++</b> <b>,</b> <i>identifier</i> ( <b>.</b> <i>identifier</i> )* <b>)</b>
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

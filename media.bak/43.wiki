@@ -1,0 +1,654 @@
+== DIP 43: D/Objective-C ==
+
+{| class="wikitable"
+!Title:	
+!''D/Objective-C''
+|-
+|DIP:	
+|43
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-06-29
+|-
+|Last Modified:
+|2014-12-28
+|-
+|Author:
+|Michel Fortin, Jacob Carlborg
+|-
+|Links:
+|[http://developer.apple.com/library/mac/#documentation/Cocoa/Conceptual/ObjectiveC/Introduction/introObjectiveC.html Objective-C]
+|}
+
+== Abstract ==
+This document is an overview of the extensions D/Objective-C brings to the D programming language. It assumes some prior knowledge of [http://developer.apple.com/library/mac/#documentation/Cocoa/Conceptual/ObjectiveC/Introduction/introObjectiveC.html Objective-C].
+
+''Note: Some parts of this document describe features which are not yet implemented and are very much subject to change. Unimplemented sections of this '''document''' are marked as such.''
+
+== Rationale ==
+
+Currently it's very cumbersome and verbose to use Objective-C libraries from D. The reason to use these libraries is to be able to use the system frameworks on Mac OS X and iOS. This proposal adds language extensions to make it significantly easier to interact and create libraries compatible with Objective-C.
+
+== Using an existing Objective-C class ==
+
+To use an existing Objective-C class, we must first write a declaration for 
+that class, and we must mark this class as coming from Objective-C. Here is
+an abbreviated declaration for class <code>NSComboBox</code>:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSComboBox : NSTextField
+{
+    private ObjcObject _dataSource;
+    ...
+}
+</syntaxhighlight>
+
+This declaration will not emit any code because it was tagged as 
+<code>extern (Objective-C)</code>, but it will let know to the compiler that the <code>NSComboBox</code>
+class exists and can be used. Since <code>NSComboBox</code> derives from <code>NSObject</code>, the 
+<code>NSObject</code> declaration must also be reachable or we'll get an error.
+
+Declaring members variables of the class is important. Even if we don't plan 
+on using them, they are needed to properly calculate the size of derived 
+classes. 
+
+=== Declaring Instance Methods ===
+
+Objective-C uses a syntax that greatly differs from D when it comes to 
+calling member functions -- instance methods and class methods in Objective-C 
+parlance. In Objective-C, a method is called using the following syntax:
+
+<syntaxhighlight lang="objc">
+[comboBox insertItemWithObjectValue:val atIndex:idx];
+</syntaxhighlight>
+
+This will call the method <code>insertItemWithObjectValue:atIndex:</code> on the 
+object <code>comboBox</code> with two arguments: <code>val</code> and <code>idx</code>.
+
+To make Objective-C methods accessible to D programs, we need to map them to a
+D function name. This is accomplished by declaring a member function and 
+giving it a selector:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSComboBox : NSTextField
+{
+    private void* _dataSource;
+    
+    void insertItem(ObjcObject object, NSInteger value) @selector("insertItemWithObjectValue:atIndex:");
+}
+</syntaxhighlight>
+
+<code>@selector</code> is a compiler recognized UDA (User Defined Attribute) declared in 
+<code>core.attribute</code>. It's publicly imported in the <code>object</code> module and therefore no explicit import is necessary.
+
+Now we can call the method in our D program as if it was a regular member 
+function:
+
+<syntaxhighlight lang="d">
+comboBox.insertItem(val, idx);
+</syntaxhighlight>
+
+=== Overloading ===
+
+Objective-C does not support function overloading, which makes it impossible to 
+have two methods with the same name. D supports overloading, and we can take 
+advantage of that in a class declaration:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSComboBox : NSTextField
+{
+    private void* _dataSource;
+    
+    void insertItem(ObjcObject object, NSInteger value) @selector("insertItemWithObjectValue:atIndex:");
+    void insertItem(ObjcObject object) @selector("insertItemWithObjectValue:");
+}
+
+comboBox.insertItem(val, idx); // calls insertItemWithObjectValue:atIndex:
+comboBox.insertItem(val);      // calls insertItemWithObjectValue:
+</syntaxhighlight>
+
+== Defining a Subclass ==
+
+Creating a subclass from an existing Objective-C class is easy, first we must
+make sure the base class is declared:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSObject
+{
+    ...
+}
+</syntaxhighlight>
+
+Then we write a derived class as usual:
+
+<syntaxhighlight lang="d">
+class WaterBucket : NSObject
+{
+    float volume;
+    
+    void evaporate(float celcius)
+    {
+        if (celcius > 100)  volume -= 0.5 * (celcius - 100);
+    }
+}
+</syntaxhighlight>
+
+WaterBucket being a class derived from an Objective-C class, it automatically 
+becomes an Objective-C class itself. We can now pass instances of WaterBucket 
+to any function expecting an Objective-C object.
+
+Note that no Objective-C selector name was specified for the <code>evaporate</code> 
+function above. In this case, the compiler will generate one. If we need the 
+function to have a specific selector name, then we must write it explicitly:
+
+<syntaxhighlight lang="d">
+void evaporate(float celcius) @selector("evaporate:")
+{
+    if (celcius > 100)  volume -= 0.5 * (celcius - 100);
+}
+</syntaxhighlight>
+
+If however we were overriding a function present in the base class, or 
+implementing a function from an interface, the Objective-C selector would be 
+inherited.
+
+=== Constructors ===
+
+To create a new Objective-C object in Objective-C, one would call the allocator
+function and then the initializer:
+
+<syntaxhighlight lang="objc">
+NSObject *o = [[NSObject alloc] init];
+</syntaxhighlight>
+
+In D, we do this instead:
+
+<syntaxhighlight lang="d">
+auto o = new NSObject();
+</syntaxhighlight>
+
+The <code>new</code> operator knows how to allocate and initialize an Objective-C object,
+it only need helps to find the right selector for a given constructor.
+When declaring an Objective-C class, we can map constructor to selector names:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSSound : NSObject
+{
+    this(NSURL url, bool byRef) @selector("initWithContentsOfURL:byReference:");
+    this(NSString path, bool byRef) @selector("initWithContentsOfFile:byReference:");
+    this(NSData data) @selector("initWithData:");
+}
+</syntaxhighlight>
+
+Like for member functions, omitting the selector will make the compiler 
+generate one. But if a constructor is inherited from a base class or 
+implements a constructor defined in an interface, it'll inherit that selector 
+instead.
+
+=== Properties ===
+
+When not given explicit selectors, property functions are given the 
+appropriate method names so they can participate in key-value coding.
+
+<syntaxhighlight lang="d">
+class Value : NSObject
+{
+    @property BigInt number();
+    @property void number(BigInt v);
+    @property void number(int v);
+}
+</syntaxhighlight>
+
+Given the above code, the compiler will use the selector <code>number</code> for the 
+getter, <code>setNumber:</code> for the setter having the same parameter type as the 
+getter, and the second alternate setter will get the same compiler-generated 
+selector as a normal function.
+
+== Objective-C Protocols ==
+
+Protocols in Objective-C are mapped to interfaces in D. This declares an 
+Objective-C protocol:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+interface NSCoding
+{
+    void encodeWithCoder(NSCoder aCoder) @selector("encodeWithCoder:");
+    this(NSCoder aDecoder) @selector("initWithCoder:");
+}
+</syntaxhighlight>
+
+Unlike regular D interfaces, we can define a constructor in an Objective-C 
+protocol.
+
+The protocol than then be implemented in any Objective-C class:
+
+<syntaxhighlight lang="d">
+class Cell : NSObject, NSCoding
+{
+    int value;
+
+    void encodeWithCoder(NSCoder aCoder)
+    {
+        aCoder.encodeInt(value, "value");
+    }
+    
+    this(NSCoder aDecoder)
+    {
+        value = aDecoder.decodeInt("value");
+    }
+}
+</syntaxhighlight>
+
+{Note: We probably need support for @optional interface methods too.}
+
+== Class Methods ==
+
+Each class in Objective-C is an object in itself that contains a set of methods
+that relates to the class itself, with no access to instances of that class. 
+The D equivalent is to use a static member function:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSSound : NSObject
+{
+    static NSSound soundNamed(NSString *name) @selector("soundNamed:");
+}
+</syntaxhighlight>
+
+There is one key difference from a regular D static function however.
+Objective-C class methods are dispatched dynamically on the class object, so
+they have a <code>this</code> reference to the class they're being called on.
+<code>this</code> might be a pointer to a class derived from the one our function was
+defined in, and through it we can call a static function from that derived 
+class if it overrides one in the current class. Here is an example:
+
+<syntaxhighlight lang="d">
+class A : NSObject
+{
+    static void name() { writeln("A"); }
+    static void writeName() { writeln("My name is ", name()); }
+}
+
+class B : A
+{
+    static void name() { writeln("B"); }
+}
+
+B.writeName(); // prints "My name is B"
+</syntaxhighlight>
+
+This is not possible with regular static functions in D.
+
+=== Class References ===
+
+In Objective-C, you can get a reference to a class by calling the <code>class</code> method:
+
+<syntaxhighlight lang="objc">
+[instance class]; // return the class object for instance
+[NSObject class]; // return the class object for the NSObject type
+</syntaxhighlight>
+
+This works similarly in D:
+
+<syntaxhighlight lang="d">
+instance.class; // get the class object for instance
+NSObject.class; // get the class object for the NSObject type
+</syntaxhighlight>
+
+The only difference is that D is strongly-typed, which means that <code>x.class</code>
+returns a different type depending on the type of <code>x</code>.
+
+Inside an instance method, use <code>this.class</code> to get the current class object;
+you cannot omit <code>this</code> like you can for regular members as it would be 
+ambiguous for the parser.
+
+There is no <code>classinfo</code> property for Objective-C objects.
+
+== Class Extensions (also known as Categories) {unimplemented} ==
+
+With Objective-C it is possible for different compilation units, and even 
+different libraries, to define new methods that will apply to existing classes.
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSString : NSObject
+{
+    wchar characterAtIndex(size_t index) @selector("characterAtIndex:");
+    @propety size_t length() @selector("length");
+}
+
+extern (Objective-C)
+__classext LastCharacter : NSString
+{
+    wchar lastCharacter() @property;
+}
+
+unittest
+{
+    NSString s = "hello";
+    assert(s.lastCharacter == 'o');
+}
+</syntaxhighlight>
+
+The <code>__classext LastCharacter : NSString</code> syntax maps to an Objective-C 
+class extension named <code>LastCharacter</code> adding methods to the <code>NSString</code> class. 
+Methods in the extension are dispatched dynamically, so you can override them in 
+a subclass of <code>NSString</code>, or in an extension of that subclass.
+
+Having two extensions defining a function with the same selector will make the 
+Objective-C runtime use one of the two implementations in both cases.
+
+{Question: should we mangle the extension name in the selector to avoid 
+conflicts? This would transparently implement Apple's recommendation that methods in third-party extensions should use a prefix to avoid clashes with future versions of the extended class and other extensions.}
+
+== <code>NSString</code> Literals ==
+
+D string literals are changed to NSString literals whenever the context 
+requires it. The following Objective-C code:
+
+<syntaxhighlight lang="objc">
+NSString *str = @"hello";
+</syntaxhighlight>
+
+becomes even simpler:
+
+<syntaxhighlight lang="d">
+NSString str = "hello";
+</syntaxhighlight>
+
+Automatic conversion only works for strings literals. If the string comes from
+a variable, you'll need to construct the <code>NSString</code> object yourself.
+
+== Selector Literals ==
+
+When you need to express a selector, in Objective-C you use the <code>@selector</code>
+keyword:
+
+<syntaxhighlight lang="objc">
+SEL sel = @selector(hasSuffix:);
+</syntaxhighlight>
+
+In D, selectors are type-safe. To create a selector type, you must know the 
+return type and the parameter type this selector should have. You can then
+
+<syntaxhighlight lang="d">
+BOOL __selector(NSString) sel = &NSString.hasSuffix;
+</syntaxhighlight>
+    
+A selector type can be used just like a delegate, with one difference. When 
+calling a selector, you need to add the object this selector applies to as the
+first argument:
+
+<syntaxhighlight lang="d">
+NSString s = "hello world";
+sel(s, "world"); // same as s.hasSuffix("world")
+</syntaxhighlight>
+
+== Protocol References ==
+
+When you need to get a reference to a protocol, in Objective-C you use the <code>@protocol</code>
+keyword:
+
+<syntaxhighlight lang="objc">
+Protocol *p = @protocol(NSCoding);
+</syntaxhighlight>
+
+In D, you use the <code>protocolof</code> property of the interface:
+
+<syntaxhighlight lang="d">
+Protocol p = NSCoding.protocolof;
+</syntaxhighlight>
+
+== Interface Builder Attributes {unimplemented} ==
+
+The <code>@IBAction</code> attribute forces the compiler generate a function selector 
+matching the name of the function, making the function usable as an action in
+Interface Builder and elsewhere.
+
+The <code>@IBOutlet</code> attribute mark fields that should be available in Interface Builder.
+
+<syntaxhighlight lang="d">
+class Controller : NSObject
+{
+    @IBOutlet NSTextField textField;
+    
+    @IBAction void clearField(NSButton sender)
+    {
+        textField.stringValue = "";
+    }
+}
+</syntaxhighlight>
+
+== Special Considerations ==
+
+=== Casts ===
+
+The <code>cast</code> operator works the same as for regular D objects: if the object you 
+try to cast to is not of the right type, you will get a <code>null</code> reference.
+
+<syntaxhighlight lang="d">
+NSView view = cast(NSView)object;
+
+// produce the same result as:
+NSView view = ( object && object.isKindOfClass(NSView.class) ? object : null );
+</syntaxhighlight>
+
+For interfaces, the cast is implemented similarly:
+
+<syntaxhighlight lang="d">
+NSCoding coding = cast(NSCoding)object;
+
+// produce the same result as:
+NSCoding coding = ( object && object.conformsToProtocol(NSCoding.protocolof) ? object : null );
+</syntaxhighlight>
+
+The compiler will not emit any runtime check when casting to a base type.
+
+=== <code>NSObject</code> vs. <code>ObjcObject</code> vs. <code>id</code> ===
+
+There are two <code>NSObject</code> in Objective-C: <code>NSObject</code> the protocol and <code>NSObject</code> 
+the class. Not all classes are derived from the <code>NSObject</code> class, but they all 
+implement the <code>NSObject</code> protocol.
+
+In D having, an interface and a class with the same name is less practical. 
+So the <code>NSObject</code> protocol is mapped to the <code>ObjcObject</code> interface instead.
+
+Because all Objective-C objects implement <code>ObjcObject</code> (the <code>NSObject</code> 
+protocol), <code>ObjcObject</code> is used as the base type to hold a generic Objective-C 
+object instead. The Objective-C language uses <code>id</code> for that purpose, but <code>id</code> 
+cannot work in D because the correct mapping of selectors requires that we 
+know the class or interface declaration.
+
+So if you have a generic Objective-C object and you need to call one of its 
+functions, you must first cast it to the right type, like this:
+
+<syntaxhighlight lang="d">
+void showWindow(ObjcObject obj)
+{
+    if (auto window = cast(NSWindow)obj)
+        window.makeKeyAndOrderFront();
+}
+</syntaxhighlight>
+
+=== Memory Management {unimplemented} ===
+
+Only the reference-counted variant of Objective-C is supported, but reference
+counting is automated which makes things much easier.
+
+Assigning an Objective-C object to a variable will automatically call the
+<code>retain</code> function to increase the reference count of the object, and clearing 
+a variable will call the <code>release</code> function on the reference object. Returning 
+a variable from a function will call the <code>autorelease</code> function.
+
+<syntaxhighlight lang="d">
+auto a = textField.stringValue; // implicit a.retain()
+auto b = a;                     // implicit b.retain()
+b = null;                       // implicit b.release()
+a = null;                       // implicit a.release()
+</syntaxhighlight>
+
+The compiler can perform flow analysis when optimizing to elide unnecessary 
+calls to retain and release.
+
+Functions in <code>extern (Objective-C)</code> class or interface declarations that return 
+a retained object reference must be marked with the <code>@retained</code> attribute. 
+The <code>@retained</code> attribute is inherited when overriding a function. Most 
+functions do not need this since they return autoreleased objects.
+
+<syntaxhighlight lang="d">
+interface NSCopying
+{
+    @retained
+    ObjcObject copyWithZone(NSZone* zone) @selector("copyWithZone:");
+}
+</syntaxhighlight>
+
+Note that casting an Objective-C object reference to some other pointer type
+will break this mechanism. <code>retain</code> and <code>release</code> must be called manually in
+those cases.
+
+To create a "weak" object reference that does not change the reference count
+and automatically becomes <code>null</code> when the referenced object is destroyed, use 
+the <code>WeakRef</code> template in the <code>objc</code> module. This is needed to break circular
+references that would prevent memory from being deallocated.
+
+{Note: need to check how to implement auto-nulling <code>WeakRef</code> efficiently.}
+
+Member variables of Objective-C classes defined in a D module are managed by 
+the garbage collector as usual.
+
+{Note: need to check how to implement this with Apple's Modern Objective-C 
+runtime.}
+
+=== Null Objects {unimplemented} ===
+
+Because of the way the Objective-C runtime handle dynamic dispatch, calling a 
+function on a <code>null</code> Objective-C object does nothing and return a zero value
+if the function returns an integral type, or <code>null</code> for a pointer type. Struct
+return values can contain garbage however.
+
+'''Do not count on that behavior in D.''' While a D compiler will use the 
+Objective-C runtime dispatch mechanism whenever it can, it might also call 
+directly or inline the function when possible.
+
+As a convenience to detect calls to <code>null</code> objects, you can use the
+<code>-objcnullcheck</code> command line directive to make the compiler emit instructions
+that check for <code>null</code> before each call to an Objective-C method and throw when
+it encounters <code>null</code>.
+
+{Question: Is disallowing calls on <code>null</code> objects desirable? How can we ensure 
+memory-safety for struct return values?}
+
+=== Applying D attributes ===
+
+You can apply D attributes to Objective-C methods as usual and they'll have
+the same effect as on any D function.
+
+<syntaxhighlight lang="d">
+abstract, final
+pure, nothrow
+@safe, @trusted, @system
+</syntaxhighlight>
+
+Type modifiers such as <code>const</code>, <code>immutable</code>, and <code>shared</code> can also be used on
+Objective-C classes.
+
+=== Design by Contract, Unit Tests ===
+
+D features such as <code>unittest</code>, <code>in</code> and <code>out</code> contracts as well as <code>invariant</code>
+all work as expected when defining Objective-C classes in D.
+
+Note that <code>invariant</code> will only be called upon entering public functions 
+defined in D. External Objective-C function won't check the invariants since
+Objective-C is unaware of them.
+
+=== Global Functions ===
+
+<code>extern(Objective-C)</code> global functions use the same ABI as C functions.
+
+=== Inner Classes {unimplemented} ===
+
+Objective-C classes defined in D can contain inner classes. You can also 
+derive an inner class from an Objective-C object.
+
+=== Memory Safety ===
+
+While the Objective-C language provide no construct to guaranty memory safety, 
+D does. Properly declared external Objective-C objects should be usable in 
+SafeD and provide the same guaranties.
+
+=== Generated Selectors ===
+
+When a function has no explicit selector, the compiler generate one in a way 
+that permits function overloading. To this end, a function with one or more
+arguments will have the type of its arguments mangled inside the selector name. 
+Mangling follows what the <code>type.mangleof</code> expression returns.
+
+For instance, here is the generated selector for these member functions:
+
+<syntaxhighlight lang="d">
+int length();                    // generated selector: length
+void moveTo(float x, float y);   // generated selector: moveTo_f:f:
+void moveTo(double x, double y); // generated selector: moveTo_d:d:
+void addSubview(NSView view);    // generated selector: addSubview_C4cocoa6appkit6NSView:
+</syntaxhighlight>
+
+You generally don't need to care about this. To get the selector of 
+a function, take its address and simply assign it to a selector variable:
+
+<syntaxhighlight lang="d">
+    void __selector(NSView view) sel = &NSView.addSubview;
+</syntaxhighlight>
+
+== Blocks {unimplemented} ==
+
+While not strictly speaking part of Objective-C, Apple's block extension for C
+and Objective-C is now used at many places through the Mac OS X Objective-C 
+Cocoa APIs. A block is roughly the same thing as a D delegate, but it is 
+stored in a different data structure.
+
+The type of a block in D is expressed using the same syntax as a delegate, 
+except that you must use the <code>__block</code> keyword. If an Objective-C function 
+wants a block argument, you declare it like this:
+
+<syntaxhighlight lang="d">
+extern (Objective-C)
+class NSWorkspace
+{
+    void recycleURLs(NSArray urls, void __block(NSDictionary newURLs, NSError error) handler)
+        @selector("recycleURLs:completionHandler:");
+}
+</syntaxhighlight>
+
+Delegates are implicitly converted to blocks when necessary, so you 
+generally don't need to think about them.
+
+<syntaxhighlight lang="d">
+workspace.recycleURLs(urls, (NSDictionary newURLs, NSError error) {
+    if (error == null)
+        writeln("success!");
+});
+</syntaxhighlight>
+
+Blocks are only available on Mac OS X 10.6 (Snow Leopard) and later.
+
+== Breakage ==
+
+There should be minimal breakage since most changes are new and only affects code marked with <code>extern (Objective-C)</code>. A few cases can break where new keywords are introduced, like <code>__selector</code>, <code>__classext</code> (unimplemented) and <code>__block</code> (unimplemented). All these keywords start with two underscores, which are considered reserved by the compiler. That means, these names shouldn't be present in user code.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

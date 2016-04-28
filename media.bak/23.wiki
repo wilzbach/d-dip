@@ -1,0 +1,502 @@
+== DIP23: Fixing properties redux ==
+{| class="wikitable"
+!Title:	
+!'''Fixing properties'''
+|-
+|DIP:	
+|23
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-02-02
+|-
+|Last Modified:
+|2013-02-02
+|-
+|Author:
+|Andrei Alexandrescu and Walter Bright
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+
+There has been significant debate about finalizing property implementation. This document attempts to provide a proposal of reasonable complexity along with checkable examples.
+
+Forces:
+
+* Break as little code as possible
+* Avoid departing from the existing and intended syntax and semantics of properties
+* Make economy of means (little or no new syntax to learn)
+* Avoid embarrassing situations such as expressions with unexpressible types or no-op address-of operator (as is the case with C functions).
+
+== In a nutshell ==
+
+There are a few simple rules that govern the behavior of D properties as per this proposal. All details are consequences of these simple rules.
+
+# Once a function has the <code>@property</code> attribute, it can NEVER be invoked using parens "()". NEVER. It simply does not understand parens. Parens are a right that <code>@property</code> forfeited. Therefore, any paren ever present after the use of a <code>@property</code>-adorned symbol will apply, if at all, to the value returned by that <code>@property</code>.
+# A <code>@property</code> may have EXACTLY ONE or EXACTLY TWO parameters, counting the implicit <code>this</code> parameter if at all. The ONE-parameter version is ALWAYS a getter, and the TWO-parameter version is ALWAYS a setter. There's no variadics, defaulted parameters, and such.
+# ANY D expression <code>expr</code> has the same meaning (and type) when <code>typeof</code> is applied to it, and when not. That means the type of <code>expr</code> when occurring in code is really <code>typeof(expr)</code>. (No kidding.)
+
+== Description ==
+
+=== The <code>-property</code> switch gets deprecated ===
+
+This DIP obviates any behavioral change via <code>-property</code>.
+
+=== Optional parens stay in ===
+
+One can't discuss properties without also discussing optional parens. These obviate to some extent the need for properties (at least of the read-only kind) and make for potential ambiguities.
+
+This proposal sustains that optional parentheses should stay in. That means, if a function or method may be called without arguments, the trailing parens may be omitted.
+
+<syntaxhighlight lang="d">
+unittest
+{
+    int a;
+    void fun1() { ++a; }
+    // will call fun
+    fun1;
+    assert(a == 1);
+
+    // Works with default arguments, too
+    void fun2(string s = "abc") { ++a; }
+    fun2;
+    assert(a == 2);
+}
+</syntaxhighlight>
+
+The same goes about methods:
+
+<syntaxhighlight lang="d">
+unittest
+{
+    int a;
+    struct S1 { void fun1() { ++a; } }
+    S1 s1;
+    // will call fun
+    s1.fun1;
+    assert(a == 1);
+
+    // Works with default arguments, too
+    struct S2 { void fun2(string s = "abc") { ++a; } }
+    S2 s2;
+    s2.fun2;
+    assert(a == 2);
+}
+</syntaxhighlight>
+
+However, that's not the case with function objects, delegate objects, or objects that implement the function call operator.
+
+<syntaxhighlight lang="d">
+unittest
+{
+    static int a;
+    static void fun1() { ++a; }
+    auto p1 = &fun1;
+    // Error: var has no effect in expression (p1)
+    p1;
+    assert(a == 0);
+}
+unittest
+{
+    int a;
+    void fun1() { ++a; }
+    auto p1 = &fun1;
+    // Error: var has no effect in expression (p1)
+    p1;
+}
+unittest
+{
+    static int a;
+    struct S1 { void opCall() { ++a; } }
+    S1 s1;
+    // Error: var has no effect in expression (s1)    s1;
+    s1;
+}
+</syntaxhighlight>
+
+Taking the type of a symbol that may be used in a paren-less call results in the type of the returned object. THIS IS A CHANGE OF SEMANTICS.
+
+<syntaxhighlight lang="d">
+unittest
+{
+    int fun1() { return 42; }
+    static assert(is(typeof(fun1) == int));
+}
+</syntaxhighlight>
+
+To get the function type, one must apply the address-of operator.
+
+<syntaxhighlight lang="d">
+unittest
+{
+    int fun1() { return 42; }
+    static assert(is(typeof(&fun1) == int delegate()));
+    static int fun2() { return 42; }
+    static assert(is(typeof(&fun2) == int function()));
+}
+</syntaxhighlight>
+
+The same goes about member functions. THIS IS A CHANGE OF BEHAVIOR.
+
+<syntaxhighlight lang="d">
+unittest
+{
+    struct S1 { int fun() { return 42; } }
+    S1 s1;
+    assert(s1.fun == 42);
+    static assert(is(typeof(s1.fun) == int)); // currently fails
+}
+</syntaxhighlight>
+
+The basic motivation here is that "s1.fun" should not change type when under "typeof".
+
+If a function returns a reference, then assignment through the paren-less call should work:
+
+<syntaxhighlight lang="d">
+unittest
+{
+    static int x;
+    ref int fun1() { return x; }
+    fun1 = 42;
+    assert(x == 42);
+}
+</syntaxhighlight>
+
+A function that returns an object that in turn supports a call with "()" will never automatically apply implicit parens to the returned object. Using either `fun` or `fun()` will return the callable entity. To invoke the callable entity immediately one must use `fun()()`.
+
+<syntaxhighlight lang="d">
+unittest
+{
+    static int x;
+    int function() fun1() { return () => 42; }
+    assert(is(typeof(fun1) == int function()));
+    assert(is(typeof(fun1()) == int function()));
+    assert(is(typeof(fun1()()) == int));
+    assert(fun1()() == 42);
+}
+</syntaxhighlight>
+
+=== "Read" properties with the @property annotation ===
+
+Functions annotated with @property are subject to additional restrictions compared to regular functions.
+
+In brief, the "()" operator may NEVER be applied EXPLICITLY to a function annotated with @property. THIS IS A CHANGE OF SEMANTICS.
+
+<syntaxhighlight lang=D>
+unittest
+{
+    @property int prop1() { return 42; }
+    assert(prop1 == 42);
+    static assert(is(typeof(prop1) == int));
+    static assert(!__traits(compiles, prop1()));
+}
+</syntaxhighlight>
+
+Applying the "()" to a property will simply apply it to the result of the property. THIS IS A CHANGE OF BEHAVIOR.
+
+<syntaxhighlight lang=D>
+unittest
+{
+    @property int function() prop1() { return () => 42; }
+    assert(prop1() == 42);
+}
+</syntaxhighlight>
+
+(Note: The @property annotation is not part of the function type, so it is impossible for a property to return a property.)
+
+==="Write" properties via the @property annotation===
+
+In order to use the assignment operator "=" property-style, the @property annotation MUST be used.
+
+The rule for allowing assignment with properties is simple. 
+
+1. If "foo" is a function that has the @property annotation AND takes exactly one parameter, then "foo = x" calls foo with argument x. Calling "foo(x)" is disallowed. The type of the expression "foo = x" is the type of foo's result.
+
+<syntaxhighlight lang=D>
+unittest
+{
+    @property void fun(int x) { assert(x == 42); }
+    fun = 42;
+   assert(is(typeof(fun = 42) == void));
+}
+</syntaxhighlight>
+
+2. If "foo" is a function that has the @property annotation AND takes exactly two parameters, then "x.foo = y" calls foo with arguments x and y. Calling "foo(x, y)" or "x.foo(y)" is disallowed.
+
+<syntaxhighlight lang=D>
+unittest
+{
+    @property double fun(int x, double y) { assert(x == 42 && y == 43); return y; }
+    42.fun = 43;
+   assert(is(typeof(42.fun = 43) == double));
+}
+</syntaxhighlight>
+
+3. If "foo" is a member function of a class or struct that has the @property annotation AND takes exactly one parameter (aside from the implicit parameter this), then "x.foo = y" calls x.foo with argument y.
+
+<syntaxhighlight lang=D>
+unittest
+{
+    struct S1
+    {
+        @property double fun(int x) { assert(x == 42); return 43; }
+    }
+    S1 s1;
+    s1.fun = 42;
+    assert((s1.fun = 42) == 43);
+    assert(is(typeof(s1.fun = 42) == double));
+}
+</syntaxhighlight>
+
+=== No module-level properties ===
+
+There is no module-level property emulating a global variable. That means a <code>@property</code> defined at module level must take either one parameter (meaning it's a getter) or two parameters (meaning it's a setter).
+
+<syntaxhighlight lang=D>
+// at module level
+@property int truncated(double x) { return cast(int) x; }
+@property void all(double[] x, int y) { x[] = cast(double) y; }
+unittest
+{
+    // truncated = 4.2; // compile-time error
+    int a = 4.2.truncated;
+    assert(a == 4);
+    auto d = [ 1.2, 3.4 ];
+    d.all = 42;
+    assert(d == [ 42.0, 42.0 ]);
+}
+</syntaxhighlight>
+
+===Taking the address of a property===
+
+If <code>prop</code> is a property, '''&prop''' or '''a.prop''' obey the normal rules of function/delegate access. They do not take the addres of the returned value implicitly. To do so, one must use '''&(prop)''' or '''&(a.prop)'''.
+
+===Applying operators===
+
+This may be getting a bit too cute, but there's quite some demand for it.
+
+If <code>a.prop</code> is a member variable, the expression <code>a.prop op= x</code> has the usual meaning. Otherwise, <code>a.prop op= x</code> gets rewritten twice. First rewrite is <code>(a.prop) op= x</code>, i.e. apply <code>op=</code> to the result of the property. Second rewrite is <code>a.prop = a.prop op x</code>. If only one of the two rewrite compiles, use it. If both compile, fail with ambiguity error.
+
+For properties, the increment operators are rewritten as follows
+
+Rewrite 1:
+
+<code>++a.p</code> ----> <code>++(a.p)</code>
+
+<code>a.p++</code> ----> <code>(++a.p)</code>
+
+Rewrite 2:
+<code>++a.p</code> ----> <code>{ auto v = a.p; ++v; a.p = v; return v; }()</code>
+
+<code>a.p++</code> ----> <code>{ auto v = a.p; ++a.p; return v; }()</code>
+
+If only one of the two rewrite compiles, use it. If both compile, fail with ambiguity error.
+
+== <code>unittest</code> ==
+
+A battery of detailed and explained unittests (derived from Kenji Hara's [http://forum.dlang.org/post/mailman.962.1359895055.22503.digitalmars-d@puremagic.com post] follows.
+
+<syntaxhighlight lang=D>
+// Could be any type
+alias Type = int;
+
+unittest
+{
+   struct S
+   {
+       @property Type foo();       // formal getter
+       @property void bar(Type);   // formal setter
+       @property ref Type baz();   // ref return getter == auxiliary setter
+   }
+
+   S s;
+   // Correct, normal property read
+   static assert( __traits(compiles, { s.foo;     }));
+   // Cannot apply "()" explicitly to a property
+   static assert(!__traits(compiles, { s.foo();   }));
+   // s.foo automatically applies the property
+   static assert(is(typeof(s.foo) == Type));
+   // Taking the address reveals the delegate
+   static assert(is(typeof(&s.foo) == Type delegate()));
+
+   // Correct, normal property write
+   static assert( __traits(compiles, { s.bar = 1; }));
+   // Cannot write properties with the function call syntax
+   static assert(!__traits(compiles, { s.bar(1);  }));
+   // A write-only property does not make sense without the assignment
+   static assert(is(typeof(s.bar)) == false);
+   // Taking the address reveals the delegate
+   static assert(is(typeof(&s.bar) == void delegate(Type)));
+
+   // Correct, normal property read
+   static assert( __traits(compiles, { s.baz;     }));
+   // Cannot use "()" with properties
+   static assert(!__traits(compiles, { s.baz();   }));
+   // The property is read, writing is done through the resulting ref
+   static assert( __traits(compiles, { s.baz = 1; }));
+   // Automatically apply "()"
+   static assert(is(typeof(s.baz) == Type));
+   // Taking the address reveals the delegate
+   static assert(is(typeof(&s.foo) == ref Type delegate()));
+   // Changing precedence with parens reveals the returned type
+   static assert(is(typeof(&(s.foo)) == Type*));
+}
+
+unittest
+{
+   struct S
+   {
+       Type foo();         // 0-arg function
+       void bar(Type n);   // 1-arg function
+       ref Type baz();     // 0-arg ref return function
+   }
+   S s;
+
+   // Normal paren-less call
+   static assert( __traits(compiles, { s.foo;     }));
+   // Normal paren-ful call
+   static assert( __traits(compiles, { s.foo();   }));
+   // Paren-less call inside typeof
+   static assert(is(typeof(s.foo) == Type));
+   // Taking address of method
+   static assert(is(typeof(&s.foo) == Type delegate()));
+
+   // Lowering assignment syntax only works with @property
+   static assert(!__traits(compiles, { s.bar = 1; }));
+   // Normal call
+   static assert( __traits(compiles, { s.bar(1);  }));
+   // object.method cannot be typed, either use "&" to take address or "()" to call
+   static assert(is(typeof(s.bar)) == false);
+   // Taking the address gets the delegate
+   static assert(is(typeof(&s.bar) == void delegate(Type)));
+
+   // Normal paren-less call
+   static assert( __traits(compiles, { s.baz;     }));
+   // Normal paren-less call followed by assignment
+   static assert( __traits(compiles, { s.baz = 1; }));
+   // Normal paren-ful call
+   static assert( __traits(compiles, { s.baz();   }));
+   // Paren-less call under typeof
+   static assert(is(typeof(s.baz) == Type));
+   // Paren-ful call under typeof
+   static assert(is(typeof(s.baz()) == Type));
+   // Getting address of delegate
+   static assert(is(typeof(&s.baz) == ref Type delegate()));
+   // Getting address of return
+   static assert(is(typeof(&(s.baz)) == Type*));
+}
+
+// Error, cannot define top-level getter
+// @property Type foo();
+// Fine, ALWAYS a getter for Type
+@property void bar(Type);
+// Error, cannot define top-level getter
+// @property ref Type baz();
+
+unittest
+{
+   // bar is a getter, not a setter
+   static assert(!__traits(compiles, { bar = 1; }));
+   // Fine, UFCS property use
+   static assert(__traits(compiles, { 42.bar; }));
+   // Can't apply parens to @property
+   static assert(!__traits(compiles, { bar(1);  }));
+   // Setter name by itself does not have a type
+   static assert(is(typeof(bar)) == false);
+   // Taking the address
+   static assert(is(typeof(&bar) == Type function()));
+}
+
+// Fine, ALWAYS a getter for Type
+@property Type foh(Type);
+// Fine, setter for Type
+@property void bah(Type n, Type m);
+// Fine, ALWAYS a getter for Type
+@property ref Type bas(Type);
+
+// Regular functions
+Type hoo(Type);
+void var(Type, Type);
+ref Type vaz(Type);
+
+unittest
+{
+   // foh is a getter, not a setter
+   static assert(!__traits(compiles, { foh = 1; }));
+   // hoo is not a property
+   static assert(!__traits(compiles, { hoo = 1; }));
+   // Cannot apply parens to property
+   static assert(!__traits(compiles, { foh(1);  }));
+   // Regular function call
+   static assert(__traits(compiles, { hoo(1);  }));
+   // Fine, foh is a getter
+   static assert(__traits(compiles, { 1.foh;   }));
+   // Fine, UFCS+paren-less call
+   static assert(__traits(compiles, { 1.hoo;   }));
+   // Cannot use () with property
+   static assert(!__traits(compiles, { 1.foh(); }));
+   // UFCS call with parens
+   static assert(__traits(compiles, { 1.hoo(); }));
+   // Cannot use properties with ()
+   static assert(!__traits(compiles, { bah(1, 2); }));
+   // Normal function call
+   static assert(__traits(compiles, { var(1, 2); }));
+   // Yes, bah is a setter
+   static assert( __traits(compiles, { 1.bah = 2; }));
+   // No lowering for regular functions
+   static assert(__traits(compiles, { 1.var = 2; }));
+   // No parens with @property
+   static assert(!__traits(compiles, { 1.bah(2);  }));
+   // UFCS call
+   static assert(__traits(compiles, { 1.var(2);  }));
+
+   // bas is a getter, not a setter
+   static assert(!__traits(compiles, { bas = 1;     }));
+   // vaz is a function with one argument
+   static assert(!__traits(compiles, { vaz = 1;     })));
+   // No parens with property
+   static assert(!__traits(compiles, { bas(1);      }));
+   // Regular function call
+   static assert(__traits(compiles, { vaz(1);      })));
+   // Cannot use () with property
+   static assert(!__traits(compiles, { bas(1) = 2;  }));
+   // Fine, call vaz and assign through the result
+   static assert(__traits(compiles, { vaz(1) = 2;  }));
+   // Fine, bas is a getter
+   static assert(__traits(compiles, { 1.bas;       }));
+   // Fine, UFCS
+   static assert(__traits(compiles, { 1.vaz;       }));
+   // Fine, read property and assign result
+   static assert(!__traits(compiles, { 1.bas = 2;   }));
+   // Fine, call function UFCS+parenless and assign result
+   static assert(__traits(compiles, { 1.vaz = 2;   }));
+   // Cannot use () with property
+   static assert(!__traits(compiles, { 1.bas();     }));
+   // UFCS call
+   static assert(__traits(compiles, { 1.vaz();     })));
+   // Cannot use parens with property
+   static assert(!__traits(compiles, { 1.bas() = 2; }));
+   // Fine, UFCS call and assign result
+   static assert(__traits(compiles, { 1.vaz() = 2; }));
+}
+</syntaxhighlight>
+
+==Additional restrictions==
+
+We want to get the design right so we're starting conservatively until there's good evidence we should relax the rules. Therefore:
+
+* No overloading of properties with any other functions.
+* Inheritance can't add a property when the other exists in the base class
+* No rvalues as the first parameter type in setters (two-parameter properties). Assignments should only work on <code>ref</code>.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+[[Category: DIP]]

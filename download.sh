@@ -52,9 +52,6 @@ for f in $(find "$MEDIA_FOLDER" -type f | tr '\n' ' ') ; do
 	# fix yaml header start
 	sed "1 i\---\nlayout: dip\nnr: $filename" -i $file
 
-	# remove dip, it was inconsistent
-	sed '/^dip: \(.*\)/d' -i $file
-
 	# fix yaml header end
 	tmpFile=$(mktemp)
 	{ sed -n '/./!q;p'; echo "permalink: /DIP$filename"; echo '---'; echo; cat; } < $file > $tmpFile
@@ -62,6 +59,9 @@ for f in $(find "$MEDIA_FOLDER" -type f | tr '\n' ' ') ; do
 
 	# properly indent yaml
 	sed 's/^\s*\(\(Title\|DIP\|Version\|Status\|Created\|Last Modified\|Author\|Links\|Language\|Breaks\|Load\):\)\s*/\L\1 /' -i $file
+
+	# remove dip, it was inconsistent
+	sed '/^dip: \(.*\)/d' -i $file
 
 	# remove stars around title in yaml header
 	sed 's/^\(title: \)\*\*\(.*\)\*\*/\1\2/' -i $file
@@ -85,6 +85,6 @@ for f in $(find "$MEDIA_FOLDER" -type f | tr '\n' ' ') ; do
 	sed 's/\(.*: \)\[\(.*\)\](\(.*\))/\1\n - "\2": \3/g' -i $file
 
 	# fix wikilinks
-	sed 's/\[\(.*\)\]\((#.*\) "wikilink")/[\/\1]\2/g' -i $file
+	sed 's/\[\(.*\)\]\((#.*\) "wikilink")/[{{site.baseurl}}\/\1]\2/g' -i $file
 
 done

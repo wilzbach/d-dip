@@ -1,0 +1,180 @@
+== DIP35: Addition to DIP25: Sealed References ==
+
+{| class="wikitable"
+!Title:	
+!'''Sealed References Amendment'''
+|-
+|DIP:
+|35
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-04-07
+|-
+|Last Modified:
+|2013-04-20
+|-
+|Author:
+|Zach Tollen
+|-
+|Links:
+|http://wiki.dlang.org/DIP25
+|}
+
+== Abstract ==
+
+[http://wiki.dlang.org/DIP25 DIP25: Sealed References] makes important inroads toward safe references in D. It consists of two parts, the first one about making 'ref' safe, and the second about '&' and 'addressOf'. The present DIP focuses mainly on the first part, proposing using 'out' as a function attribute and 'scope' parameters to add flexibility to the restrictions imposed by DIP25, but also makes a small proposal regarding the '&' operator.
+
+In this proposal, I will assume that the compiler tracks the locality of each variable with three categories: 'local', which is known to be stack-allocated; 'global', which means static or heap-allocated; and 'reference parameter', which is unknown, but could be either. (The eventual intent should be to group every action involving references into one of the three categories: '@safe', 'error', and '@system'.)
+
+== 'scope' Parameters ==
+
+<syntaxhighlight lang="d">
+ref T func(ref T p) {
+  T a;          // locality: 'local'
+  static T b;   // locality: 'global'
+  p;            // locality: 'ref parameter'
+
+  return a; // Error: a local may not be returned by ref
+  return b; // @safe: returning a global by ref
+  return p; // @safe, so long as caller keeps track of result!
+  return *new T; // @safe, heap == global
+}
+</syntaxhighlight>
+
+Above, the reference parameter 'p' may be returned. The safety measures suggested by DIP25 will ensure that the return value will not itself be escaped if a local was passed in. This allows the "identity" function to work perfectly. But what if you wanted to create a "copy" function, which was guaranteed to return a non-local, regardless of what was passed in?
+
+<syntaxhighlight lang="d">
+ref T identity(ref T a) { return a; }
+ref T copy(ref T p) {
+  T* t = new T;
+  *t = p;
+  return *t;
+}
+
+ref T testFuncs() {
+  T t;
+  return identity(t); // Error, as it should
+  return copy(t);     // @safe, but error according to DIP25
+}
+</syntaxhighlight>
+
+'ref' alone is not powerful enough to deal with this issue efficiently. Without any more information available to the caller, the result of 'copy(t)' must be assumed local, even if it's meant to be global. If you could mark each parameter with additional information, using the 'scope' attribute, the return value could be accurately identified as global, and because the information is found in the signature of the function, it is available both when being called and when compiling the function.
+
+<syntaxhighlight lang="d">
+ref T copy(scope ref T a) {
+  T* t = new T;
+  *t = a;
+  return *t;
+  //return a; // Error: may not return a 'scope' parameter
+}
+
+ref T testCopy() {
+  T t;
+  return copy(t); // Pass: t is 'scope', return *must* be global
+}
+</syntaxhighlight>
+
+While in many cases it would be attractive to be able to have 'scope' imply 'ref', since 'scope' must always refer to at least one reference, the several existing reference types in D, e.g. objects, arrays, delegates, would make that a bad idea.
+
+If a function has more than one parameter, 'scope' could be used to fine-tune what may or may not be returned from it:
+
+<syntaxhighlight lang="d">
+ref T add(ref T a, scope ref T b) {
+  a = a + b; // assume T implements opAdd
+  return a;
+  //return b; // Error: may not return 'scope' parameter
+}
+
+ref T test() {
+  T c;
+  static T d;
+  //return add(c, d); // Error, 'c' is local
+  return add(d, c); // Pass, only 'd' may be returned
+}
+</syntaxhighlight>
+
+== The 'out' Function Attribute ==
+
+While 'scope' parameters are attractive, marking a lot of parameters 'scope' might be tedious. One option is to imagine the 'out' keyword as a function attribute, guaranteeing that no reference may be escaped, in effect marking all parameters 'scope'. It is slightly more intuitive than 'scope', especially as 'scope' would be necessary to add outside the parameter list of member functions, to describe the hidden 'this' reference.
+
+<syntaxhighlight lang="d">
+struct S {
+  int t;
+  ref S copyAdd(scope ref S p) scope {
+    S* s = new S;
+    s.t = t + p.t;
+    return s;
+  }
+  // Same effect, but more intuitive
+  out S copyAdd(ref S p) {
+    S* s = new S;
+    s.t = t + p.t;
+    return s;
+  }
+}
+</syntaxhighlight>
+
+It may be desirable to divide the possible meanings of 'scope' into more than one attribute. Escaping a reference parameter by returning it is generally safer than assigning it to a global variable.
+
+<syntaxhighlight lang="d">
+ref T func(ref T a) {
+  return a; // Escape by return, @safe if tracked at call site
+  static T* s = &a; // Escape by global pointer, @system
+}
+</syntaxhighlight>
+
+'out' as a function attribute could indicate that no reference parameter will be returned by reference, while 'scope' would only ensure that the parameter may not escape by any other means, while still being returnable by reference. This use of 'scope' would invalidate its use in fine-tuning parameters, which may require introducing another parameter attribute, '@noreturn', for example, with 'out' now implicitly marking parameters this instead.
+
+<syntaxhighlight lang="d">
+ref T func(scope ref T a, ref T b, @noreturn ref T c) {
+  return a; // pass
+  return b; // pass
+  return c; // error
+  T* p = &a; // Escape to local pointer, @safe? if *p is tracked
+  static T* s = &a; // error
+}
+out T func(scope ref T a, ref T b, @noreturn ref T c) {
+  return a; // error
+  return b; // error
+  return c; // error
+  return new T; // pass
+  static T t;
+  return t; // pass
+}
+</syntaxhighlight>
+
+There may be significant advantage in separating the two aspects of ref parameters into two different function attributes. Attribute inference may be a way of alleviating the burden on programmers of adding all the necessary attributes to their functions.
+
+The minor problem of placing it after a declaration and confusing it with an 'out' contract is solved by either ensuring that 'out' is not the last attribute listed, or by inserting 'body' between 'out' and '{'.
+
+<syntaxhighlight lang="d">
+T func(ref T a) out @trusted { return *new T; }
+T func(ref T a) out body { return *new T; }
+</syntaxhighlight>
+
+== The '&' operator and C Functions ==
+
+This is a very minor additional suggestion regarding DIP25, and I don't expect it to resolve the whole issue. While '&' is generally dangerous, backward compatibility with C functions would make it inconvenient to disallow. Therefore, some value may be gained by permitting its use when calling C functions.
+
+<syntaxhighlight lang="d">
+void func1(T* t) {}
+extern (C) void func2(T* t) {}
+
+void test() {
+  T a;
+  func1(&a); // Error, according to DIP25
+  func2(&a); // Pass, for backward compatibility reasons
+}
+</syntaxhighlight>
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

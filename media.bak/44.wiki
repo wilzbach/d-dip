@@ -1,0 +1,212 @@
+{| class="wikitable"
+!Title:
+!'''scope(this)'''
+|-
+|DIP:
+|44
+|-
+|Version:
+|2
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-08-23
+|-
+|Last Modified:
+|2013-08-23
+|-
+|Author:
+|H. S. Teoh
+|-
+|Links:
+|}
+
+==Abstract==
+
+Extend scope guards to include class lifetime and struct lifetime, in order to solve the partially-constructed object problem. The Rationale section explains what this problem is and how this DIP solves it.
+
+==Description==
+
+The syntax of scope(this) follows that of the current scope guards. They are only allowed inside the body of the class/struct constructor:
+
+<syntaxhighlight lang=D>
+class C {
+    Resource res;
+    this() {
+        res = acquireResource();
+        scope(this) res.release();
+    }
+}
+
+struct S {
+    Resource res;
+    this(T args) {
+        res = acquireResource();
+        scope(this) res.release();
+    }
+}
+</syntaxhighlight>
+
+When the class is destructed or the struct goes out of scope, the associated scope statements will be executed in reverse order of their execution in the constructor. The same happens if, for whatever reason, the class/struct instance fails to be created (e.g., the ctor throws an Exception).
+
+The intended usage is, as illustrated by the above example, is to perform cleanups of resources acquired in the constructor. While this can already be achieved by putting the corresponding code in the destructor, using the scope guard syntax is much cleaner and also avoids some pitfalls in the traditional approach, as the next section will explain.
+
+==Rationale==
+
+Consider the following class, whose ctor needs to acquire a number of external resources that must be freed upon destruction of the class instance:
+
+<syntaxhighlight lang=D>
+class C {
+    Resource1 res1;
+    Resource2 res2;
+    Resource3 res3;
+
+    this() {
+        res1 = acquireResource!1();
+        res2 = acquireResource!2();
+        res3 = acquireResource!3();
+    }
+
+    ~this() {
+        res3.release();
+        res2.release();
+        res1.release();
+    }
+}
+</syntaxhighlight>
+
+There are several problems with this code.
+
+First, it suffers from the partially-constructed object problem: suppose res1 and res2 were acquired successfully, but acquireResource!3() throws an Exception. In this case, res1 and res2 needs to be cleaned up. However, we cannot call the destructor for this purpose, because res3 has not be acquired, and so the <code>res3.release()</code> line would be incorrect. In order to deal with this correctly, we need to do something like the following:
+
+<syntaxhighlight lang=D>
+class C {
+    Resource1 res1;
+    Resource2 res2;
+    Resource3 res3;
+
+    this() {
+        res1 = acquireResource!1();
+        try {
+            res2 = acquireResource!2();
+
+            try {
+                res3 = acquireResource!3();
+            } catch(Exception e) {
+                res2.release();
+            }
+        } catch(Exception e) {
+            res1.release();
+        }
+    }
+
+    ~this() {
+        res3.release();
+        res2.release();
+        res1.release();
+    }
+}
+</syntaxhighlight>
+
+This is rather ugly. It requires many levels of try/catch nesting in the constructor, and also duplication of the release() calls in the destructor. Fortunately, D's scope guards provide a cleaner solution:
+
+<syntaxhighlight lang=D>
+class C {
+    Resource1 res1;
+    Resource2 res2;
+    Resource3 res3;
+
+    this() {
+        res1 = acquireResource!1();
+        scope(failure) res1.release();
+
+        res2 = acquireResource!2();
+        scope(failure) res2.release();
+
+        res3 = acquireResource!3();
+        scope(failure) res3.release();
+    }
+
+    ~this() {
+        res3.release();
+        res2.release();
+        res1.release();
+    }
+}
+</syntaxhighlight>
+
+However, this solution is not perfect. It still suffers from code duplication: the release() calls need to be both in the constructor and in the destructor, in order for the resources to be released correctly in all cases. It puts the code that releases the resources in a distant piece of code, which is error-prone. It would be far better if we only write the release() call only ''once'', next to the code that acquires said resource.
+
+With the proposed extension of scope guards to scope(this), we can do this:
+
+<syntaxhighlight lang=D>
+class C {
+    Resource1 res1;
+    Resource2 res2;
+    Resource3 res3;
+
+    this() {
+        res1 = acquireResource!1();
+        scope(this) res1.release();
+
+        res2 = acquireResource!2();
+        scope(this) res2.release();
+
+        res3 = acquireResource!3();
+        scope(this) res3.release();
+    }
+
+    ~this() {
+        // N.B.: the dtor is no longer needed!
+    }
+}
+</syntaxhighlight>
+
+Not only is the code far more concise and readable, and no longer has fragile duplication across different parts, its intent also becomes clear: res1, res2, and res3 will last precisely for the duration of the lifetime of the class instance.
+
+If the class instance is prematurely destructed, for example, the ctor encounters an error and throws an Exception, then the instance is considered to have ended its lifetime, and any scope(this) statements encountered up to that point will be executed, so the resources that have been acquired will be released. Note that ''only'' the resources that have ''already'' been acquired will be released; if acquireResource!2() throws an Exception, res3's scope guard hasn't been reached yet, so res3.release() will not be executed. This provides a clean, simple solution to the partially-constructed object problem.
+
+If the class instance no longer has any references and the GC cleans it up, the object will be considered to have reached the end of its lifetime, so the GC will execute the scope(this) statements registered by the constructor. Thus, the ''same'' release() statements will get triggered in both the case of failed construction of the object, and the case of the object reaching the natural end of its lifetime. This keeps the code consistent and less bug-prone (e.g., there is no opportunity for a typo to cause the resource only to be released correctly at the normal end-of-life of the object, but not when the ctor throws an Exception, since exactly the same code is registered by the scope(this) statement).
+
+==Consequences==
+
+With this extension to scope guards, class and struct destructors will practically not be needed anymore, since scope(this) will take care of cleaning up everything. The advantage of this approach is that the cleanup code can now be put next to the initialization code, making it easier to maintain and less bug-prone. The fact that we also solve the partially-constructed object problem as a by-product is a bonus on top of that.
+
+==Implementation==
+
+This idea was inspired by Adam D. Ruppe's idiom of writing classes and structs this way:
+
+<syntaxhighlight lang=D>
+struct S {
+    void delegate()[] cleanupFuncs;
+    Resource1 res1;
+    Resource2 res2;
+    Resource3 res3;
+
+    this(T args) {
+        res1 = acquireResource!1();
+        cleanupFuncs ~= { res1.release(); };
+
+        res2 = acquireResource!2();
+        cleanupFuncs ~= { res2.release(); };
+
+        res3 = acquireResource!3();
+        cleanupFuncs ~= { res3.release(); };
+
+    }
+
+    ~this() {
+        foreach_reverse (f; cleanupFuncs)
+            f();
+    }
+}
+</syntaxhighlight>
+
+This DIP proposes native syntax support for this idiom by unifying it with D's scope guards, in addition to making its behaviour more consistent. Currently, it is unclear whether an Exception thrown inside the constructor will trigger a call to the destructor. If it doesn't, then this code will not release acquired resources correctly. This problem is solved by this DIP that postulates that scope(this) statements will run regardless of how the object or struct ends its lifetime.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

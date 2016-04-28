@@ -1,0 +1,181 @@
+{| class="wikitable"
+!Title:	
+!'''Defined compile time paradox resolution'''
+|-
+|DIP:
+|31
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-17-27
+|-
+|Last Modified:
+|2014-09-24
+|-
+|Author:
+|Amaury SÉCHET
+|}
+
+== Abstract ==
+
+It is easy to introduce paradoxes with compile time feature, by introducing new symbols when they may have been used by other compile time feature. Currently, what happen in completely implementation defined and can change from version to version. This DIP intend to propose a sane way to handle compile time paradoxes.
+
+== Rationale ==
+
+The way compile time paradoxes are handled right now is implementation defined. it may change with any release, and make it impossible to write a front end that handle such features in a consistent way with DMD.
+
+== Resolution priority ==
+
+Resolution priority are defined as follow :
+# A construct that do not introduce new symbol (except itself).
+# A construct that may introduce symbol conditionally.
+# A construct that may introduce unknown symbols.
+
+The obvious feature of priority 3 is mixin, as it may introduce arbitrary symbols.
+All declarations (variables, fields, functions, method, alias, templates, etc...) are of priority 0, unless they are in a static if, in which case they become of priority 1.
+Static ifs are of the highest priority it contains.
+
+See sample code for constructs with priority noted as comment.
+<syntaxhighlight lang="d">
+int i; // 1
+void foo() {} // 1
+
+static if(condition1) { // 3
+    int j; // 2
+    static if(condition2) { // 2
+        int k; // 2
+    }
+} else {
+    mixin(str); // 3
+}
+
+</syntaxhighlight>
+
+All symbol of priority 0 are registered in the symbol table directly. Symbols of priority 1 are registered as conditional symbols.
+
+== Poison mode ==
+
+As long as construct of priority 1 or 2 exists, the symbol table is in poison mode. Any attempt to resolve a symbol will create a poison at the corresponding entry in addition to process the regular symbol lookup. Any attempt to register a symbol at a poisoned position is an error.
+<syntaxhighlight lang="d">
+
+string foo() {
+	return "int foo(int i) { return i; }";
+}
+
+mixin(foo()); // Error, foo is poisoned.
+</syntaxhighlight>
+
+However, this work as foo don't need to be resolved before the new overload is mixed in :
+<syntaxhighlight lang="d">
+string foo() {
+	return bar();
+}
+
+mixin(bar());
+
+string bar() {
+	return "int foo(int i) { return i; }";
+}
+</syntaxhighlight>
+
+== Order of evaluation ==
+
+Construct of priority 2 are evaluated in order of appearance in the source. When all constructs of priority 2 are reduced, the compiler start reducing construct of priority 1, in order of appearance.
+
+Example of order of evaluation :
+<syntaxhighlight lang="d">
+mixin(A); // 1
+
+static if(condition) { // 2
+    mixin(B); // 3
+    static if(condition2) { ... } // 5
+}
+
+static if(condition3) { ... } // 6
+mixin(C); // 4
+</syntaxhighlight>
+
+== Resolution of conditional symbols ==
+
+A compile time construct can require the resolution of a conditional symbol. In this case, construct on which the inclusion of that symbol depends on are reduced on a per needed basis. If a construct need to reduce itself, this is an error.
+
+See examples :
+<syntaxhighlight lang="d">
+bool foo() {
+    return true;
+}
+
+static if(foo()) { // Error, static if may introduce foo.
+    void foo() {}
+}
+</syntaxhighlight>
+
+<syntaxhighlight lang="d">
+bool foo() {
+    return true;
+}
+
+mixin(bar()); // 1. bar is conditionally included, static if is evaluated.
+              // 3. mixin is processed, i is introduced. If is was resolved before, it is an error as i is poisoned.
+
+static if(foo()) { // 2. static if is reduced.
+    string bar() { return "int i;"; }
+}
+</syntaxhighlight>
+
+Symbol withing function call are resolved in order of appearance in the function, and function are explored in a depth first manner :
+<syntaxhighlight lang="d">
+int bar() {
+    // 2. resolve symbol present in bar in order of appearance.
+}
+
+int foo() {
+    return bar() + buzz(); // 1. resolve bar.
+                           // 3. resolve buzz.
+}
+
+int buzz() {
+    // 4. resolve symbol in buzz.
+}
+
+static if(foo() > 0) { ... }
+</syntaxhighlight>
+
+Note: The local scope of method isn't in poison mode.
+
+== Examples ==
+
+Some concern about various examples have been raised in the newsgroup. This DIP define their behavior properly, but they may require extra explanations.
+
+<syntaxhighlight lang="d">
+static if(is(typeof(y))) int x;
+static if(is(typeof(x))) int y;
+</syntaxhighlight>
+
+In this case, the first static if is resolved first. Its condition refers to y, which is a conditionally included symbol withing the second static if. The compiler proceed to evaluate the second static if. The condition of the second static if now refers to x, which is conditionally included in the first static if.
+
+At this point we have a loop and the compiler errors, as the condition of the first static if depends on the resolution of the first static if.
+
+<syntaxhighlight lang="d">
+enum xx = "string x = \"void foo() {}\""
+
+mixin(x);
+mixin(xx);
+</syntaxhighlight>
+
+Mixin are resolved in order, which mean the first mixin is resolved first. The symbol x is not found, which is an error. It may be considered an extra limitation, as this program could have assigned an unique unambiguous meaning. But mixin can in general introduce arbitrary symbols and coming with a strategy that is both simple enough for the developer to understand, and tractable enough for D to compile quickly seems unrealistic (or I'm not smart enough to imagine it).
+
+== Conclusion ==
+
+This DIP propose a way to ensure that no compile time construct can change the meaning of previously reduced compile time construct. What happen right now is such situation is completely implementation defined (and may change any time). The proposed solution allow to forward reference symbols within static ifs, so error are reduced to cases where compile time construct change their own meaning and order in the file should not matter most of the time.
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

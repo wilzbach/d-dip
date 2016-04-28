@@ -1,0 +1,220 @@
+== DIP 88: Named Parameters ==
+
+{| class="wikitable"
+!Title:	
+!''Named Parameters''
+|-
+|DIP:	
+|88
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2016-01-23
+|-
+|Last Modified:
+|2016-01-23
+|-
+|Author:
+|Jacob Carlborg
+|}
+
+== Abstract ==
+This document describes a simple form of named parameters
+
+== Rationale ==
+Sometimes it can be very useful to be able to use named parameters. It mostly increases the documentation at the call site.
+<syntaxhighlight lang="d">
+Rect createRect(int x, int y, int width, int height);
+createRect(0, 0, 200, 200);
+</syntaxhighlight>
+
+In the above example it's not so easy to see at the call site what the different arguments mean. In what order should the coordinate and size be passed?
+
+Another typical example is with boolean arguments:
+
+<syntaxhighlight lang="d">
+void sendRequest(Request req, bool log);
+sendRequest(req, true);
+</syntaxhighlight>
+
+Again, at the call site it can be difficult to remember what the boolean flag means.
+
+Supporting named parameters directly in the language prevents the need to add workarounds with weird looking syntax like https://dlang.org/phobos/std_typecons.html#.Flag.
+
+== Description ==
+This is a proposal for a simple form of named parameters. 
+
+=== Simple Example ===
+
+Simple example of declaring and calling a function with named parameters:
+
+<syntaxhighlight lang="d">
+Rect createRect(int x:, int y:, int width:, int height:);
+createRect(x: 0, y: 0, width: 200, height: 200);
+</syntaxhighlight>
+
+=== Rules ===
+
+# Any parameter that is supposed to be nameable at the call site needs to be explicitly declared as such. This is required because otherwise the parameters of all exist functions would become part of the API
+# It's legal mix named and non-named parameters, both when declaring a function and calling the function
+# It's optional to name the parameters when calling a function declared with named parameters
+# It's ''not'' legal to change the order of the arguments at the call site when using the named parameter syntax. This simplifies the function overloading rules (no change is required)
+# A named parameter at the call site will ''not'' conflict with any other symbol with the same name
+# For the initial version it's ''not'' legal to declare a variadic parameter as a named parameter. This restriction might be lifted in the future
+# Combining a template specialization with a named parameter requires a space between the two colons
+# It's ''not'' legal to overload a function purely based on the parameter names. The overloading rules do not change with this proposal
+
+=== Syntax ===
+
+A new syntax is added to be used when declaring a function that should be callable with named parameters:
+
+<syntaxhighlight lang="d">
+Rect createRect(int x:, int y:, int width:, int height:);
+</syntaxhighlight>
+
+Each parameter that should be able to be named at the call site is required to end with a colon.
+
+Calling a function using the named parameter syntax:
+
+<syntaxhighlight lang="d">
+createRect(x: 0, y: 0, width: 200, height: 200);
+</syntaxhighlight>
+
+Prefix the function arguments with the name of the parameter, a colon is used to separate the name of the parameter from the vale of the argument.
+
+The same can be applied to templates:
+
+<syntaxhighlight lang="d">
+struct Array(ElementType:) {}
+Array!(ElementType: int) array;
+</syntaxhighlight>
+
+== Examples ==
+<syntaxhighlight lang="d">
+Rect createRect(int x:, int y:, int width:, int height:);
+createRect(0, 0, 200, 200);
+</syntaxhighlight>
+
+The above code would compile since it's still perfectly fine to call a function declared with named parameters using the standard calling syntax.
+
+<syntaxhighlight lang="d">
+createRect(x: 0, y: 0, width: 200, height: 200);
+</syntaxhighlight>
+
+The above is an example of calling the same function with named parameters.
+
+Mixing named and regular parameters:
+
+<syntaxhighlight lang="d">
+createRect(0, 0, width: 200, height: 200);
+</syntaxhighlight>
+
+Using symbols with the same parameter names is legal:
+
+<syntaxhighlight lang="d">
+createRect(x: x, y: y, width: width, height: height);
+</syntaxhighlight>
+
+Changing the order when using the named parameter syntax is not legal:
+
+<syntaxhighlight lang="d">
+createRect(width: 200, height: 200, x: 0, y: 0); // error
+</syntaxhighlight>
+
+Mixing regular and named parameters when declaring a function:
+
+<syntaxhighlight lang="d">
+void sendRequest(Request req, bool log:);
+</syntaxhighlight>
+
+Calling the above function:
+
+<syntaxhighlight lang="d">
+sendRequest(req, log: true);
+</syntaxhighlight>
+
+Compiles as expected.
+
+<syntaxhighlight lang="d">
+sendRequest(req: req, log: true);
+</syntaxhighlight>
+
+The above would be an error since the "req" parameter is not declared as a named parameter.
+
+Named parameters combined with default values:
+
+<syntaxhighlight lang="d">
+void foo(int a: = 3, int b: = 4);
+foo();
+foo(a: 5, b: 6);
+foo(b: 6); // this is not allowed since it's not legal to reorder the arguments
+</syntaxhighlight>
+
+Templates with named parameters:
+
+<syntaxhighlight lang="d">
+struct Array(ElementType:) {}
+Array!(ElementType: int) array;
+</syntaxhighlight>
+
+<syntaxhighlight lang="d">
+void sendRequest!(bool log:)(Request req);
+sendRequest!(log: true)(req);
+</syntaxhighlight>
+
+<syntaxhighlight lang="d">
+template isInt(Type:) {}
+isInt!(Type: int);
+</syntaxhighlight>
+
+Template specialization with named parameter:
+
+<syntaxhighlight lang="d">
+struct Array(ElementType: : Object) {}
+Array!(ElementType: Object) array;
+</syntaxhighlight>
+
+Name parameters and uniform function call syntax:
+
+<syntaxhighlight lang="d">
+void sendRequest(Request req, bool log:);
+req. sendRequest(log: true);
+</syntaxhighlight>
+
+==== Interfacing with Objective-C ====
+
+<syntaxhighlight lang="objc">
+@interface NSObject
+- (void)performSelector:(SEL)aSelector
+             withObject:(id)anArgument
+             afterDelay:(NSTimeInterval)delay;
+@end
+</syntaxhighlight>
+
+Bindings for the above Objective-C method could look like:
+
+<syntaxhighlight lang="d">
+extern(Objective-C) interface NSObject
+{
+    void performSelector(SEL aSelector, NSObject withObject:, NSTimeInterval afterDelay:) @selector("performSelector:withObject:afterDelay:");
+}
+</syntaxhighlight>
+
+Which then can be called exactly as in Swift:
+
+<syntaxhighlight lang="d">
+obj.performSelector("foo:", withObject: obj2, afterDelay: 3);
+</syntaxhighlight>
+
+== Breakage == 
+
+No code is expected to break since all changes are additive. This is enforced by requiring the colons when declaring a function and not allowing to change the order of the arguments when calling a function with named parameters.
+
+== Copyright ==
+
+This document has been placed in the Public Domain.

@@ -1,0 +1,226 @@
+{| class="wikitable"
+!Title:
+!'''static unittest blocks'''
+|-
+|DIP:
+|82
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2015-09-27
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Jonathan M Davis
+|-
+|Links:
+|}
+
+== Abstract ==
+Provides a way to handle unittest blocks inside of templates which works with ddoc without compiling the unittest blocks into each instantiation.
+
+== Rationale ==
+At present, unittest blocks inside of a templated type are compiled into every instantation, which only works with tests that are generic, which most tests aren't, and it almost never works with examples and thus doesn't work for ddoc-ed unittest blocks.
+
+So, at present, ddoc-ed unittest blocks cannot be used inside of templated types, and most unittest blocks for templated types cannot go inside of the types that they test, because they end up being compiled into every template instantiation, which means that they are compiled and run far more times than necessary, and they get compiled into and run in every program that instantiates the template instead of just with the module in which they're defined. The result of this is that most unittest blocks that test templated types need to be put outside of the template, making it so that we lose out on ddoc-ed unittest blocks and making the unit tests far less maintainable, because they're not right after the functions that they're testing like they would normally be (and of course, because the examples aren't inside of ddoc-ed unittest blocks, the risk of them being incorrect increases).
+
+To be able to have ddoc-ed unittest blocks inside of templates as well as have all of the tests right next to the functions that they're testing, we need a way to declare unittest blocks inside of a template such that they exist regardless of whether the template is instantiated and such that they are only compiled once regardless of how many times the template is instantiated.
+
+== Description ==
+This DIP proposes adding the concept of a static unittest block.
+
+    static unittest
+    {
+        // my test code...
+    }
+
+This would only apply inside of templates (outside of templates, a static unittest block would be identical to a normal one). Inside of a template, a static unittest block is a unittest block which is compiled in regardless of whether the template is instantiated, and it is not considered to be part of the template as far as compilation goes aside from the fact that it is scoped within the template. If it has a ddoc comment on it, it will then be used as an example in the preceding ddoc comment as would normally occur.
+
+The result of this is that a static unittest block can have non-generic tests of the template which aren't compiled into each instantation of the template. It means that the unittest blocks will be compiled into the unittest build of the module that they're in, not into the code that instantiates the template. It also means that if they instantiate the template (as they would normally do if they're testing it), then that template will be instantiated in the unittest build of that module even if nothing else in the code references that template. So, the programmer will not have to put additional unittest blocks outside of the template to instantiate the template or to do any kind of testing on the template. All of the unittest blocks that test that template and/or test an example from the documentation of a symbol within the template can be internal to that template.
+
+Non-static unittest blocks will function exactly as they have, even if they are inside of a template, meaning that anyone who wants a unittest block to be compiled into each instantiation of a template and run for each instantiation of the template can just declare a non-static unittest block inside the template as they have done up until now. So, the programmer then has control over whether a given unittest block is compiled into each instantiaton of the template (non-static unittest) or whether it's compiled exactly once inside of the module that it's declared in (static unittest).
+
+Take the following code:
+
+    import std.stdio;
+    
+    /++
+      +/
+    struct S(T)
+    {
+    public:
+    
+        /++
+            Returns the value of foo.
+          +/
+        @property T foo()
+        {
+            return _foo;
+        }
+    
+        ///
+        unittest
+        {
+            writeln("Testing foo in an example");
+            assert(S!int(5).foo == 5);
+            assert(S!string("hello world").foo == "hello world");
+            assert(S!bool(true).foo == true);
+        }
+    
+        unittest
+        {
+            writefln("Testing foo");
+            assert(S!dchar('W').foo == 'W');
+        }
+    
+        unittest
+        {
+            writefln("Testing %s.foo", S.stringof);
+            assert(S(T.init).foo == T.init);
+        }
+    
+    private:
+    
+        T _foo;
+    }
+
+If this code is compiled with ''-unittest -main'' and run, it won't print anything, because nothing has instantiated '''S''' outside of '''S'''. If this unittest block were added after the template
+
+    unittest
+    {
+        S!int s;
+    }
+
+then the unit test build would print
+
+    Testing foo in an example
+    Testing foo
+    Testing S!int.foo
+    Testing foo in an example
+    Testing foo
+    Testing S!string.foo
+    Testing foo in an example
+    Testing foo
+    Testing S!bool.foo
+    Testing foo in an example
+    Testing foo
+    Testing S!dchar.foo
+
+Because '''S''' has four different instantiations in this code ('''int''', '''string''', '''bool''', and '''dchar'''), all three of the unittest blocks are compiled and run four times each.
+
+If this DIP were implemented, and static were added to two of the unittest blocks like so
+
+    import std.stdio;
+    
+    /++
+      +/
+    struct S(T)
+    {
+    public:
+    
+        /++
+            Returns the value of foo.
+          +/
+        @property T foo()
+        {
+            return _foo;
+        }
+    
+        ///
+        static unittest
+        {
+            writeln("Testing foo in an example");
+            assert(S!int(5).foo == 5);
+            assert(S!string("hello world").foo == "hello world");
+            assert(S!bool(true).foo == true);
+        }
+    
+        static unittest
+        {
+            writefln("Testing foo");
+            assert(S!dchar('W').foo == 'W');
+        }
+    
+        unittest
+        {
+            writefln("Testing %s.foo", S.stringof);
+            assert(S(T.init).foo == T.init);
+        }
+    
+    private:
+    
+        T _foo;
+    }
+    
+    unittest
+    {
+    }
+
+then instead of nothing being printed, something like this would print
+
+    Testing foo in an example
+    Testing foo
+    Testing S!int.foo
+    Testing S!string.foo
+    Testing S!bool.foo
+    Testing S!dchar.foo
+
+This exact ordering assumes that the static unittest blocks are run prior to any of the instantiations' unittest blocks being run, which is probably best but doesn't necessarily matter. What matters is that the static unittest blocks are now compiled and run only once, and they are compiled in even though '''S''' has not been instantiated by any code outside of '''S''' - and of course, because the static unittest blocks instantiate '''S''', the non-static unittest blocks inside of '''S''' get compiled and run for each instantiation. So, with this change, it's reasonable to use ddoc-ed unittest blocks inside of a templated type, and it's no longer necessary to put any unittest blocks outside of a templated type in order to test it.
+
+While the primary gain here is with templated types, for consistency, it shouldn't matter whether a static unittest is inside of a templated type - just that it's inside of a template. A static unittest block should be compiled into the module that it's in whenever '''-unittest''' is used, regardless of whether the unittest block is inside of a type. All of these examples would result in the static unittest blocks being compiled exactly once whether the template is instantiated elsewhere or not:
+
+    template S(T)
+    {
+        struct S
+        {
+            //...
+        }
+    
+        static unittest
+        {
+            writeln("I'm only compiled and run once!");
+        }
+    }
+
+    template S(T)
+    {
+        struct S
+        {
+            //...
+    
+            static unittest
+            {
+                writeln("I'm only compiled and run once!");
+            }
+        }
+    }
+
+    template map(alias pred)
+        //if(...)
+    {
+        auto map(R)(R range)
+            //if(...)
+        {
+            //...
+        }
+    
+        static unittest
+        {
+            writeln("I'm only compiled and run once!");
+        }
+    }
+
+== Impact ==
+With static unittest blocks, it becomes possible to put non-generic unit tests inside of templates, which will improve maintainability and allow us to have ddoc-ed unittest blocks for examples inside of templated types, whereas right now, we really can't. All of those unittest blocks end up outside of the templated type, and we're worse off for it. This DIP fixes that, and it fits in very well with how static is used elsewhere in the language. And because it only affects unittest blocks which are marked as static inside of templates, we don't lose the ability to have generic unittest blocks like we do now. Flexibility and power is increased without losing any flexibility or power. The increase in complexity to the language is very minor, and code that uses static unittest blocks will actually become simpler and easier to maintain. Several modules in Phobos would already benefit from this (e.g. std.container for its containers and std.datetime for its *Interval types) as would any code which declares a templated type.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

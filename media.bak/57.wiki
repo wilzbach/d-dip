@@ -1,0 +1,144 @@
+== DIP57: static foreach ==
+{| class="wikitable"
+!Title:	
+!'''static foreach'''
+|-
+|DIP:	
+|57
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2014-03-09
+|-
+|Last Modified:
+|2014-03-09
+|-
+|Author:
+|Timon Gehr
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+The goal of this DIP is to propose semantics for the 'static foreach' construct. In short, 'static foreach' relates to 'foreach' like 'static if' relates to 'if'.
+
+== Scope ==
+This proposal suggests an additive language change. The only code that will change behaviour is code that contains the new construct. The new language construct is specified economically in terms of the existing foreach construct. Specification will be informal (in order to be able to leverage the existing informal specification of foreach statements) but quite precise.
+
+== Proposal ==
+=== Grammar ===
+The language grammar is updated in the following way:
+
+
+   ForeachTypeAttribute:
+ +     alias
+ +     enum
+
+   ForeachStatement:
+ -     Foreach ( ForeachTypeList ; ForeachAggregate ) NoScopeNonEmptyStatement
+ +     Foreach NoScopeNonEmptyStatement
+ 
+ + Foreach
+ +     ForeachKeyword ( ForeachTypeList ; ForeachAggregate )
+
+ + StaticForeach
+       static Foreach
+
+ - Foreach:
+ + ForeachKeyword:
+       foreach
+       foreach_reverse
+
+ + StaticForeachDeclaration
+ +     StaticForeach DeclarationBlock
+ +     StaticForeach : DeclDefs[opt]
+
+ + StaticForeachStatement
+ +     StaticForeach NoScopeNonEmptyStatement
+
+The current grammar does not specify locations where 'static if' is valid. The 'static foreach' rules should be fitted into the corrected grammar analogously to the 'static if' rules.
+
+=== Semantics ===
+The syntax tree parsed under rule Foreach is subject to all type checking performed on that part of a corresponding foreach statement except creation of a new nested scope and insertion of symbols into that scope. Additionally, CTFE is invoked on all expressions occurring in the ForeachAggregate. The body of the static foreach statement or static foreach declaration is duplicated once for each iteration which the corresponding foreach statement with an empty body would perform when executed in CTFE. If CTFE would fail, then expansion of the static foreach construct will fail as well. The duplicated bodies are then compiled in in order. Every such body obtains access to names that the corresponding foreach statement would have introduced. (For static foreach statements, the usual restrictions on shadowing for declarations in function scope apply.) For the i-th duplicated body, the names are bound to manifest constants (or alias declarations) describing the value (symbol) that the corresponding foreach statement would have assigned to a variable (alias) of this name in the i-th iteration. Declarations introduced in the body itself are inserted into this enclosing scope, however, the names introduced by the loop itself are not accessible from outside or in distinct iterations unless explicitly aliased. For static foreach statements, break and continue are supported and treated like for foreach statements over seqs.
+
+The grammar changes add 'alias' and 'enum' as valid foreach type attributes. They explicitly specify the loop index to be an alias or enum declaration respectively. Those attributes can be used in both foreach over seq and static foreach.
+
+== Examples ==
+This is an incomplete set of examples for the purpose of illustration.
+
+==== Method declarations ====
+
+<syntaxhighlight lang="d">
+ enum toDeclare = ["foo", "bar", "baz"];
+
+ class C{
+     static foreach(m;toDeclare){
+         mixin("void "~m~"(D d){ d."~m~"(false); }");
+     }
+ }
+</syntaxhighlight>
+
+==== Variable declarations ====
+
+<syntaxhighlight lang="d">
+ import std.conv, std.range;
+ static foreach(x;0..10){
+     mixin("int i" ~ to!string(x) ~ " = " ~ to!string(x)~";");
+ }
+ static assert(is(typeof(i0)==int));
+ 
+ static foreach(x;iota(1,10)){
+     static assert(is(typeof(mixin(i~to!string(x)))==int));
+ }
+</syntaxhighlight>
+
+==== Overloads ====
+
+<syntaxhighlight lang="d">
+ alias Seq(T...)=T;
+ static foreach(T;Seq!(int, double, float)){
+     T foo(T arg){ return arg; }
+ }
+</syntaxhighlight>
+
+==== Iterating over members of a scope ====
+
+<syntaxhighlight lang="d">
+ static foreach(m;__traits(allMembers, C)){
+     static if(someCondition!(__traits(getMember, C, m))):
+     mixin(generateBoilerplate!(__traits(getMember, C, m)));
+ }
+</syntaxhighlight>
+
+==== Function scope ====
+
+<syntaxhighlight lang="d">
+ void foo(){
+     static foreach(i;0..2){{
+         int x = 2; // ok
+         writeln(x);
+     }}
+     static foreach(i;0..2){
+         int x = 2; // error: multiple declarations of x
+         writeln(x);
+         break;
+     }
+ }
+ void bar(){
+     static foreach_reverse(i;0..2){
+         writeln(i);
+     }
+ }
+</syntaxhighlight>
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

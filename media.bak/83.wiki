@@ -1,0 +1,242 @@
+{| class="wikitable"
+!Title:
+!'''Configurable Assert Diagnostics'''
+|-
+|DIP:
+|83
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2015-10-01
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Per Nordlöw
+|-
+|Links:
+|}
+
+== Abstract ==
+Allow for '''assert''' to do pretty printing of its failing expression when flagged for in call to compiler. Printing is configurable via specific sets of (template) function overloads.
+
+== Rationale ==
+
+A failing assert (in a unittest), currently, give no hint about why it failed. To aid the developer in debugging, the failing assert of a
+
+* binary expression, such as '''assert(x == y)''', should print the values of '''x''' and '''y''' and 
+* unary expression, such as '''assert(!x)''', should print the value of '''x'''.
+
+This extra, so called, pretty printing can be enabled by changing the dmd flag '''-unittest''' to, say, '''-unittest=verbose''' for a specific failing module. This will be more convenient than explicitly adding the prints of the left-hand-side expression '''lhs''' and right-hand-side expression '''rhs''' directly before the call to the failing assert.
+
+== Description ==
+
+This DIP proposes to add library-level-configurable diagnostics to failing calls to '''assert(expr)''' typically called from within '''unittest'''-blocks.
+
+This diagnostics is activated only when DMD is called with a specific command line flag, say '''-unittest=verbose''' or perhaps '''-diagnose=assert'''.
+
+== Modifications needed in Compiler Frontend ==
+
+=== Binary Operator Lowering ===
+
+If DMD is called with this flag it will rewrite (lower) all assert expressions ('''AssertExpr''' in dmd source) such as
+
+<syntaxhighlight lang="d">
+assert(a BINOP b)
+</syntaxhighlight>
+
+into
+
+<syntaxhighlight lang="d">
+(auto ref a, auto ref b) {
+    if (a BINOP b) return;
+    onAssertFailed!"BINOP"(a, b, __FILE__, __LINE__, __FUNCTION__, __MODULE__);
+} (e1, e2)
+</syntaxhighlight>
+
+where '''onAssertFailed''', in this binary operator case, is declared as
+
+<syntaxhighlight lang="d">
+void onAssertFailed(string op, E1, E2)(E1 e1, E2 e2, string file, uint line, string function, string module);
+</syntaxhighlight>
+
+=== Unary Operator Lowering ===
+
+Similarly, for unary expressions, rewrite (lower)
+
+<syntaxhighlight lang="d">
+assert(UNOP e)
+</syntaxhighlight>
+
+with
+
+<syntaxhighlight lang="d">
+(auto ref e) {
+    if (UNOP e) return;
+    onAssertFailed!"UNOP"(e, __FILE__, __LINE__, __FUNCTION__, __MODULE__);
+} (e)
+</syntaxhighlight>
+
+where on onAssertFailed, in this unary operator case, is declared as
+
+<syntaxhighlight lang="d">
+void onAssertFailed(string op, E)(E e, string file, uint line, string function, string module);
+</syntaxhighlight>
+
+=== Non-Operator Lowering ===
+
+For the case when no unary or binary operator is present in the top assert expression, unary overload of '''onAssertFailed''' is called with '''op''' being empty string. In other words the '''assert''' expression
+
+<syntaxhighlight lang="d">
+assert(e)
+</syntaxhighlight>
+
+is rewritten (lowered) into
+
+<syntaxhighlight lang="d">
+(auto ref e) {
+    if (e) return;
+    onAssertFailed!""(e, __FILE__, __LINE__, __FUNCTION__, __MODULE__);
+} (e)
+</syntaxhighlight>
+
+If the assert lowering must also be sensitive to expressions like
+
+=== Non-Equality Operator Lowering ===
+
+Further note that operator '''!=''' may need special care because D only supports overloading via '''opUnary!"!"''' and '''opBinary!"=="'''. This because the D compiler rewrites
+
+<syntaxhighlight lang="d">
+x != y
+</syntaxhighlight>
+
+into
+
+<syntaxhighlight lang="d">
+!(x == y)
+</syntaxhighlight>
+ 
+To make assert diagnostics as configurable as possible it may become relevant to enable the possibility for the developer to to define the overload '''onAssertFailed!"!="''' aswell. If this is desirable the lowering logic in DMD must be sensitive to expressions
+
+<syntaxhighlight lang="d">
+assert(!(a == b))
+</syntaxhighlight>
+
+which, preferrably, will be rewritten to
+
+<syntaxhighlight lang="d">
+(auto ref a, auto ref b) {
+    if (!(a == b)) return;
+    onAssertFailed!"!="(a, b, __FILE__, __LINE__, __FUNCTION__, __MODULE__);
+} (e1, e2)
+</syntaxhighlight>
+
+== Modifications needed in D Runtime ==
+
+=== Configuring Diagnostics ===
+
+The default implementations (in druntime) of all the '''onAssertFailed'''-overloads should, as a first step, by defined to exactly mimic the current behaviour of '''assert()'''. This because, memory requirements of the call to DMD will increase when the compiler must generate terminal printing-code of all the arguments for all the unittests found in the compilation unit of interest. And it is currently unclear if this, current increase in system requirements, will be compatible with system resources currently available in build servers connected to GitHub.
+
+Specific printing behaviour of '''assert()''' diagnostics can then be extendable by adding (typically templated) overloads of '''onAssertFailed''' for specific sets of types (concepts).
+
+For instance, diagnostics specifically when comparing arithmetic types, could be realized through the overload
+
+<syntaxhighlight lang="d">
+import std.traits : isArithmetic;
+void onAssertFailed(string op, E1, E2)(E1 e1, E2 e2, string file, uint line, string function, string module)
+    if (isArithmetic!L && 
+        isArithmetic!R)
+{
+    version(assert)
+    {
+        import core.exception : AssertError;
+        throw AssertError("Failed arithmetic assert: " ~ e1 ~ " " ~ binOp ~ " " ~ e2);
+    }
+}
+</syntaxhighlight>
+
+In this way D would get the extendability we want in testing-frameworks such as '''std.experimental.testing''' (https://github.com/D-Programming-Language/phobos/pull/3207) without adding a new '''assert'''-overload-set and without sacrifycing default memory usage in DMD/Phobos unittests.
+
+Further, this solution enables the possibility to provide fancy diagnostics behaviour in '''onAssertFailed''' for failing '''array'''/'''range''' or aggregate ('''struct''' or '''class''') comparisons. This diagnostics could also have different pretty printing backends such as HTML.
+
+== Examples of Possible Diagnostics Outputs ==
+
+=== Short Array Assert Arguments ===
+
+For example a failing
+
+<syntaxhighlight lang="d">
+assert([1,2,3] == [1,2,4]);
+</syntaxhighlight>
+
+could pretty-print
+
+<syntaxhighlight lang="d">
+([1,2,3][2] is 3) != ([1,2,4][2] is 4)
+</syntaxhighlight>
+
+=== Aggregate Assert Arguments ===
+
+or, for aggregates, a failing
+
+<syntaxhighlight lang="d">
+struct A { int x, y; }
+auto a = A(1,2);
+auto b = A(1,3);
+assert(a == b);
+</syntaxhighlight>
+
+could pretty-print
+
+<syntaxhighlight lang="d">
+(a.y is 2) != (b.y is 3)
+</syntaxhighlight>
+
+=== Large Array Assert Arguments ===
+
+or, for very large arrays, a failing
+
+<syntaxhighlight lang="d">
+const n = 1_000_000;
+auto a = iota(0, n).array;
+auto b = a.dup;
+a[1_000 .. 1_002] = 0;
+assert(a == b);
+</syntaxhighlight>
+
+could pretty-print
+
+<syntaxhighlight lang="d">
+(a[1_000 .. 1_002] is [0, 0]) != (b[1_000 .. 1_002] is [1_000, 1_001])
+</syntaxhighlight>
+
+An optional '''multiLine''' flag could in this case be motivated. When set this flag changes output to
+
+<syntaxhighlight lang="d">
+(a[1_000 .. 1_002] is [0, 0]) !=
+(b[1_000 .. 1_002] is [1_000, 1_001])
+</syntaxhighlight>
+
+This in order for comparison to be more visually helpful to developers.
+
+== References ==
+
+Parts of the solution list at
+
+https://issues.dlang.org/show_bug.cgi?id=5547#c3
+
+including rewriting/expansion of '''AssertExpr''' could probably reused.
+
+=== Discussions on topic ===
+* http://forum.dlang.org/post/holdxspayjguauomrbcx@forum.dlang.org
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

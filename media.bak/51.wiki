@@ -1,0 +1,75 @@
+{| class="wikitable"
+!Title:
+!'''not-virtual-by-default'''
+|-
+|DIP:
+|51
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-11-27
+|-
+|Last Modified:
+|2013-11-27
+|-
+|Author:
+|Manu Evans
+|}
+
+== Abstract ==
+
+Virtual calls are inefficient, and through extensive discussion, it has been shown that it is impossible for an optimiser to safely finalise virtuals in any useful capacity in a non-JIT/VM environment.
+This DIP proposes that class methods need to be non-virtual by default, or D classes will always yield inferior performance characteristics to other native languages.
+
+In support of this change, introduction of the 'virtual' keyword will be required, and a deprecation process similar to the introduction of override will be followed.
+'final' will be preserved, and remain useful to effectively 'seal' a hierarchy, in the same way as is useful in Java, C++, and C# (via 'sealed').
+
+== Process ==
+
+Introduction of virtual would be added in steps:
+# The virtual keyword is introduced; it becomes a warning to declare a virtual base function not marked virtual.
+# deprecate declaring virtual functions not marked virtual.
+# It becomes a compile error; virtual is enforced.
+
+At this point, all methods are marked with either 'virtual', 'override', 'final', 'abstract', or are implicitly final.
+
+== Example ==
+
+<syntaxhighlight lang="d">
+class Base
+{
+  f();  // <- warning->deprecated->error, f() is implicitly final
+  virtual g();
+  final h();
+}
+
+class Derived : Base
+{
+  override f()
+  override g(); // <- valid
+  override h(); // <- error, h() is explicitly final
+}
+</syntaxhighlight>
+
+== Interfaces ==
+
+For brevity, it is safe to assume all methods of an interface are implicitly virtual.
+
+<syntaxhighlight lang="d">
+interface Interface
+{
+  f(); // <- implicitly virtual
+}
+
+class Class : Interface
+{
+  override f(); // <- f() is declared in an interface, which is implicitly virtual
+}
+</syntaxhighlight>
+
+[[Category: DIP]]

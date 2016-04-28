@@ -1,0 +1,193 @@
+== DIP 39: Safe rvalue references: backwards compatible, escapable, safe against ref/nonref code evolution, compatible with UFCS and DIP38 ==
+
+{| class="wikitable"
+!Title:	
+!''Safe rvalue references: backwards compatible, escapable, safe against ref/nonref code evolution, compatible with UFCS and DIP38.''
+|-
+|DIP:	
+|39
+|-
+|Version:
+|2
+|-
+|Status:
+|
+|-
+|Created:
+|2013-05-10
+|-
+|Last Modified:
+|2013-05-12
+|-
+|Author:
+|Timothee Cour
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+
+We propose to introduce rvalue (RV) references via a special call site annotation '''Expr^''' that creates a temporary from an expression Expr.
+
+Features:
+* backwards compatible: current valid D code will continue to work without change. In addition, RV references are made possible with a call site annotation
+* does not introduce any change in function signature as in DIP36
+* allows to safely escape the RV reference, as opposed to DIP36 which didn't allow escaping those
+* both const ref or ref can be used with rvalue refs (more flexible than C++)
+* safe against ref/nonref code evolution: code that would change behavior due to ref/nonref signature change would result in compile errors rather than silently modify behavior
+* can be used with UFCS
+* compatible with DIP38: can use same inref/outref internal compiler annotation (or explicit user annotation) for input references that can be returned by ref by a function.
+* safe: guarantees memory safety so that references will always point to valid memory (either runtime safety as proposed in Dconf13 or compile time safety through DIP38)
+
+== Motivation ==
+Rvalue references is one of the rare features that C++ has over D. It allows to have both efficiency (passing by reference) and convenience (do not break UFCS pipelines for example).
+A recent DIP was proposed (DIP36) to support them but had the following shortcomings: it prevented returning such references from a function (useful in functions such as tap), and it required modifying the signature of the function with scope ref. 
+This proposal addresses the shortcomings of DIP36, and works by requiring a call site annotation for converting rvalues to a temporary lvalue reference. 
+Furthermore, given DIP38 (safety of refs) and DIP39 (rvalue refs), I would argue that pass by ref should be the new prefered way to take inputs in most cases.
+
+== Details ==
+Let us introduce some notation:
+* '''LV''' : denotes an lvalue expression
+* '''RV''' denotes an rvalue expression
+* '''Expr''' denotes an expression (could be an LV or RV)
+
+We introduce the following new notation:
+* '''fun(Expr^)''' : creates a temporary variable from '''Expr''' before passing it to a function that takes '''Expr''' by ref. 
+I propose the symbol '^' to denote this temporary creation (^ is also used for XOR in D but shouldn't create ambiguity as XOR is binary), although there are alternatives, see section: 'Alternative symbols for temporary creation'.
+
+<syntaxhighlight lang="d">
+// Suppose we have a function:
+T2 funRef(ref T a);
+// We can use it as before with an LV (backwards compatible):
+funRef(LV); 
+// Our proposed new syntax also allows to call fun by creating a temporary from an expression:
+funRef(Expr^);//create a temporary before calling funRef: 'auto _tmp=Expr; funRef(_tmp);'
+</syntaxhighlight>
+
+The rule is simple: funRef(ref T a) can still only take an LV, and 'Expr^' or '(Expr)^' creates a temporary LV from an Expr. 
+With funRef(ref T a):
+* funRef(LV); //ok: LV passed by ref
+* funRef(RV); //error
+* funRef(Expr^); // ok: 'auto _tmp=Expr; funRef(_tmp);'
+
+with funNonRef(T a):
+* funNonRef(Expr); // ok
+* funNonRef(Expr^); // error
+
+If passing an LV to a ref-taking function that involves an implicit conversion, then binding is disallowed without the call-site annotation; this is the LRL (Lvalue-Rvalue-Lvalue) problem pointed out by Andrei:
+<syntaxhighlight lang="d">
+void fix(ref double x) { if (isnan(x)) x = 0; }
+float a;
+fix(a); // error due to mismatched types
+</syntaxhighlight>
+
+With those rules, current valid code will stay valid, and new code becomes possible in a safe way.
+
+== Implementation details ==
+The compiler will create a temporary whose lifetime shall survive the entire expression where '''Expr^''' occurs:
+<syntaxhighlight lang="d">
+expr ( funRef(Expr^)  )
+//rewritten by compiler as:
+auto _tmp=Expr;
+expr ( funRef(_tmp)  );
+</syntaxhighlight>
+
+== UFCS == 
+The rule for UFCS is the same:
+
+with 'funRef(ref T a)':
+* LV.funRef(); //ok
+* RV.funRef(); //error
+* Expr^.funRef(); //ok
+
+with 'funNonRef(T a)':
+* Expr.funNonRef(); //ok
+* Expr^.funNonRef(); //error
+
+== Safety against return by ref/nonref code evolution ==
+As Andrei pointed out recently, introducing RV references must take into account the dangers of ref/nonref code evolution. Our solution is safe in this aspect:
+<syntaxhighlight lang="d">
+struct A{ref T opIndex(int i){...}}
+void funRef(ref T x){if (isnan(x)) x = 0; }
+A a;
+funRef(a[0]);//ok since a[0] is an LV.
+//later on the code changes: opIndex returns by value 'T opIndex(int i)'.
+funRef(a[0]);//now becomes an error since a[0] becomes an RV! so we're prevented from accepting code that silently does the wrong thing.
+</syntaxhighlight>
+
+Let us consider the reverse evolution from nonref to ref:
+<syntaxhighlight lang="d">
+struct A{ T opIndex(int i){...}}
+void funRef(ref T x){...} // some function which may modify x
+funRef(a[0]^); //ok, a temporary is created from the RV a[0]. 
+// later on, code changes: opIndex returns by ref 'ref T opIndex(int i)'.
+funRef(a[0]^); //still ok, a temporary copy of a[0] (which is now an LV) is still created.
+</syntaxhighlight>
+In this second example, the code behavior remains unchanged before and after the opIndex signature change, as in both cases a temporary copy is created. This is especially relevant if funRef modifies its input in any way.
+Note: thanks to Dmitry S for proposing to accept LV^, motivated by this example (the original proposal only accepted RV^).
+
+== Safety against another type of code evolution ==
+This section could be taken out of this DIP39 without affecting it as it is independent of RV refs, but it further enhances language safety against ref/nonref code evolution:
+<syntaxhighlight lang="d">
+void fix(ref T x){if (isnan(x)) x = 0; return x;}
+T x;
+fix(x); //ok
+// later, fix takes by nonref and returns by nonref:
+T fix(T x){if (isnan(x)) x = 0; return x;}
+fix(x); //compiles but does nothing!
+</syntaxhighlight>
+
+I propose to make it an error to ignore a nonref return value, and to add a function 'ignore' for convenience that consumes and does nothing:
+<syntaxhighlight lang="d">
+void ignore(T)(T a){}
+// can be used as:
+fix(x); // error: nonref return value returned by fix(x) is ignored
+fix(x).ignore; // ok (although not very useful here; but would be for ignoring, say, printf C style error codes)
+</syntaxhighlight>
+
+* Note1 :This can be enabled with a compiler flag -error_ignored_nonref_return.
+* Note2 :This will be compiled away so has no runtime performance penalty.
+* Note3: ref returned values are safer to ignore as ref returns should point to outside memory (either static object or temporary created by RV^ or an lvalue on the stack). Example: ref T (ref T x){if (isnan(x)) x = 0; return x;). 
+We could also choose to error on all ignored returned values but that might break more code.
+
+== Safety == 
+Memory safety would be the same as the current situation in D with same existing pitfalls and no new pitfalls introduced. In conjunction with DIP 38, memory safety would be guaranteed at compile time. With the one introduced in Dconf13, it would be guaranteed with a runtime check.
+
+== Alternative symbols for temporary cration ==
+
+2 things to decide on : prefix or postfix annotation, and which annotation to use: 
+
+prefix vs postfix:
+* postfix fun(RV^): (proposed): compatible with left-to-right pipelines in D: [1,2].sort.map!fun.uniq
+* prefix fun(^RV): compatible with '&' location wrt RV argument
+This can affect ease of disambiguation wrt existing symbols.
+
+which annotation to use (regardless of prefix/postfix):
+* fun(RV^);//(proposed). Used for XOR but should not be ambiguous; reminds of a C++ special reference extension
+* fun(RV@);//@ has UDA meaning in D, but that could be made unambiguous
+* fun(auto(RV));  // suggested by Dmitry S; reminds of creating a temporary variable with auto-deduced type, analog to int(x + 1)
+* fun(RV.auto);  // UFCS version of auto(RV), makes UFCS much nicer
+* likewise with ref(RV) and RV.ref //reminds of C# call site annotation via 'ref', and reminds of function signature
+* fun(RV#); //# has a special line reordering meaning in D, but that could be made unambiguous
+* fun(RV?); //? has a special (a?b:c) meaning in D, but that could be made unambiguous
+* fun(RV&); //probably a bad idea, since for a templated function fun(T)(ref Ta ) this could call fun!(typeof(RV*))(RV&)
+
+This could look like this:
+<syntaxhighlight lang="d">
+T fun1(ref T2);
+T fun2(ref T2);
+//with RV^:
+[1,2]^.fun1^.fun2.writeln;
+//with auto(RV):
+auto(auto([1,2]).fun1).fun2.writeln; // a bit verbose
+//with RV.auto:
+[1,2].auto.fun1.auto.fun2.writeln; // better
+</syntaxhighlight>
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+Thanks to Dmitry S for useful suggestions.
+[[Category: DIP]]

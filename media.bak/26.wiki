@@ -1,0 +1,283 @@
+{| class="wikitable"
+!Title:	
+!'''Properties the other way round'''
+|-
+|DIP:	
+|26
+|-
+|Version:
+|5
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-02-08
+|-
+|Last Modified:
+|2013-02-16
+|-
+|Author:
+|Robert Klotzner
+|-
+|Links:
+| [[DIP23]]
+|}
+
+== Abstract ==
+This DIP establishes a very concrete definition of the term property and desired characteristics of properties and in turn establishes semantics of use for them. For optional parentheses, I would like to adopt the scheme already explained in [[DIP23]].
+
+This DIP is about changing the actual specification, not trying to make the implementation to match the specification, because in my view of things, the current implementation is not that bad, rather the idea that the "front"/"empty" members of ranges are allowed to be a field, might not be that a desirable goal (it is not necessary for infinite ranges - see below!).
+
+Properties in my proposal are no longer about optional parentheses or forbidden parentheses. Properties are a concept hat benefits from the fact that parentheses are optional, but would work either way. I emphasize the value of functions and I am questioning the idea of making properties field-like.
+
+== Rationale ==
+[[DIP23]] and [[DIP24]] seem to consider properties as a tool to make a function look more like a field and strive to make it basically compatible with them, which can not work in the general case. (With get/set methods, you can not take the address for example)
+
+Properties as defined in this DIP are a way of encapsulation of fields of an entity (class, struct, module) in a way that the class/struct/module has a chance of controlling the access and thus encapsulates it, such that the field in reality might not even exist or be in a different format than presented, ...
+
+The usual way of establishing this kind of encapsulation, is by the use of get/set methods and not exposing any fields in public. The problem with this approach is that the common case are trivial get/set methods which just return the internal fields value or set the fields value respectively. Also the naming of set/get methods is specified by convention making it hard for tools to detect what actually is a property and what is none if the convention is broken.
+
+This DIP simply makes properties a convenient way of providing get/set methods with a standardized syntax and convenience accessor syntax.
+
+== Description ==
+A property in D is defined as either a specially marked get method for read-only properties:
+<syntaxhighlight lang="d">
+@property T foo();
+</syntaxhighlight>
+
+or a specially marked set method for write-only properties:
+
+<syntaxhighlight lang="d">
+@property void foo(T value);
+</syntaxhighlight>
+or both for read/write properties.
+
+The "@property" for the get method, basically does nothing but annotation, for the set method the "@property" enables the following syntax:
+<syntaxhighlight lang="d">
+foo=someValue;
+</syntaxhighlight>
+
+
+For a default implementation and solving the boilerplate problem of traditional set/get methods the following syntax is suggested:
+<syntaxhighlight lang="d">
+@property T foo;
+</syntaxhighlight>
+which will be lowered by the compiler to:
+<syntaxhighlight lang="d">
+private T __foo; // Just some internal name.
+
+@property void foo(T value) {
+    __foo=value;
+}
+
+@property T foo() {
+    return __foo;
+}
+</syntaxhighlight>
+
+As it has been asked in the newsgroups a lot: Why not simply use a public field? The syntax for accessing them in D's current syntax for properties is the same anyway:
+<syntaxhighlight lang="d">
+foo=someValue;
+someValue=foo;
+</syntaxhighlight>
+
+Well yes, but this is a pitfall. A public field simply offers no encapsulation by its very definition: It is a public field. This means:
+# You can rely on the fact that the field really exists somewhere in the object - you can take its address, can use it as an lvalue.
+# A change of a public field to a property would break the ABI, which is a problem for dynamic libraries.
+# You can use them in expressions, which are currently not allowed for properties like:  <syntaxhighlight lang="d">
+  foo+=someValue;  foo/=someValue; </syntaxhighlight>
+While the latter could be fixed, the former two can't.
+
+Also one could do:
+<syntaxhighlight lang="d">
+auto val=foo();
+</syntaxhighlight>
+if foo is a function, but one could not do this if foo was a field. [[DIP23]] tries to solve this, by disallowing foo() for properties too, essentially making properties to look a bit more like a field. I strongly believe that this is exactly the wrong direction, as you can easily make a public field a function and most of the time they are anyway.
+
+There have been some rejections to the @property field syntax on the news group. While it is true, that this can easily be achieved by means of mixins, I think, if we adopt this DIP and establish functions/properties as the way to go by default for generic algorithms, then this little additional syntactic sugar could greatly help to establish this, because creating accessor functions, would hardly be any more work than just making the field public.
+
+== Taking the address of a property ==
+
+The unary & operator is free to take the address of the accessor method, just like it would for a normal function. You can not retrieve the address of the return value, because it is an rvalue.
+
+And yeah, just as in DIP23:
+
+<syntaxhighlight lang="d">
+@property int a();
+assert(is(typeof(a)==int));
+</syntaxhighlight>
+because writting just "a" is equivalent to writing "a()".
+
+== Overloading @property methods ==
+# Properties may not be overloaded with normal functions.
+# Property-set-method overloads might be overloaded with a version taking its argument via ref, for performance reasons.
+
+The following property definition would be illegal:
+<syntaxhighlight lang="d">
+private T a_;
+@property ref T a() {
+    return a_;
+}
+</syntaxhighlight>
+
+as properties are defined to be get/set accessor methods, the above definition basically makes a setter not only unnecessary but would even rule out its existence, as 
+<syntaxhighlight lang="d">
+a=someValue;
+</syntaxhighlight>
+could either use the ref returning function or the setter, thus making the call ambiguous.
+
+Also @property would have no effect on this defintion anyway, so just leave it out. The semantic stays the same because of the optional-parentheses feature of functions:
+<syntaxhighlight lang="d">
+private int a_;
+ref int a() {
+    return a_;
+}
+unittest {
+    a=7;
+    int c=a;
+}
+</syntaxhighlight>
+
+== No UFCS for properties ==
+As properties provide set/get methods for some kind of field, I would argue that UFCS properties do not make too much sense, as they would have to rely on other public fields/functions to actually fulfill their duty. (Forget about private access allowed from the whole module for a moment.)  Set/get methods defined outside of the concerned entity, simply do not seem to be of any value.
+
+But wait! What about arrays? You can not define get/set functions inside the definition of an array! Yes and this actually is the reason why people start to scream when they read "no UFCS properties", but just step a little back:
+
+What people are concerned about, are ranges. "front" for example currently is defined in the following way for arrays:
+
+<syntaxhighlight lang="d">
+@property ref T front(T)(T[] a) { ... }
+</syntaxhighlight>
+
+and for strings:
+<syntaxhighlight lang="d">
+@property dchar front(A)(A a) { ... }
+</syntaxhighlight>
+
+Both will still work, because the @property is simply not needed, just drop it, the semantics won't change. @property, for a getter, is basically a no-op and is just there for annotation/documentation.  This means ranges for arrays continue to work, as they do now.
+
+Ok, good examples and yeah this basically covers our concerns about ranges, but what if someone would come up with a very important application, where he would actually require a setter function for an array?
+
+Well, why would one want to do this? It would be one of the following reasons:
+# Do some validation, e.g. restrict the values that might be set.
+# Trigger some additional action whenever the array is written to.
+# Transform the input data in some way, before applying it to the array.
+
+One and two would not really be a good idea done this way, as everyone can still access the array directly, instead it would be better to encapsulate it:
+<syntaxhighlight lang="d">
+struct MyCoolWrapper(T) {
+  private T[] arr_;
+  @property void prop(T val)  {
+     assert(isValid(val));
+     arr_[someCalculatedIndex]=val;
+     someOtherAction();
+  }
+}
+</syntaxhighlight>
+
+The last point is the only one, which might actually make some sense. On the other hand, why not also wrap it into a struct in this case? If you want to maintain compatibility with a plain array, there is still "alias this".
+
+In practice you will hardly ever have the need for UFCS properties and the rare occasions where they might really come in handy, you can still use a wrapping struct instead.
+
+And just once again to calm down everybody, it is absolutely a non-issue for ranges.
+
+Ok, not needed and all, but they can not harm either?
+
+In fact they do, because module level properties would become ambigous. Would a one-parameter-module-level property be a setter or an UFCS getter? Also they can easily be abused for really nonsense scenarios:
+
+<syntaxhighlight lang="d">
+@property void foo(int a, int b) {
+  int c=a*b;
+  doSomethingCool(c);
+}
+
+8.foo=9;
+</syntaxhighlight>
+
+Well people argue, that almost every language feature can be abused. My question is just why would we allow this one, but disallow perfectly valid module level properties? Well, it only would make sense, if UFCS properties were actually a good and needed feature, but as I was trying to prove, this does not seem to be the case.
+
+== Behaviour like functions ==
+The issue with functions returning functions/delegates and optional parantheses, is solved by this DIP as properties no longer pretend to be fields, they are functions offering convenience syntax. So it is perfectly fine to call a property accessor function with <code>foo()</code> or <code>foo(arg)</code> and is even mandatory if you want to call a returned delegate/function:
+<syntaxhighlight lang="d">
+@property void function() foo();
+
+unittest {
+// Call the returned function:
+foo()();
+}
+</syntaxhighlight>
+
+Well, ok this only works if range members have to be functions, but what about infinite ranges? "empty" has to be statically defined for std.range.isInfinite to detect an infinite range:
+<syntaxhighlight lang="d">
+import std.range;
+struct InfiniteRange {
+  enum empty=false;
+  int front=8;
+  void popFront() {}
+}
+unittest {
+  assert(isInfinite!(InfiniteRange));
+}
+</syntaxhighlight>
+True, but we have CTFE, just make the empty function static:
+<syntaxhighlight lang="d">
+import std.range;
+struct InfiniteRange {
+  static bool empty() {
+    return false;
+  }
+  int front() {
+    return 8;
+  }
+  void popFront() {}
+}
+unittest {
+  assert(isInfinite!(InfiniteRange));
+}
+</syntaxhighlight>
+and isInfinite will be satisfied too.
+
+Ok, but then @property does not seem to do much in you proposal. Why properties at all?
+
+# So that a ref returning function is syntax wise more or less compatible with set/get methods.
+# So that we don't break existing code.
+# And although D is a multi-paradigm language, OOP and techniques like encapsulation are well established and have proven to be valuable, so a language feature that helps there syntax-wise is not such a bad idea either.
+
+== Upgrade path ==
+Functions like:
+<syntaxhighlight lang="d">
+@property ref front();
+</syntaxhighlight>
+will only need to have @property removed. Every code using it will continue to work as it did.
+
+For ranges, where front/back really are no functions they should be changed to actually be functions, even if trivial ones, to ensure full compatibility, as code is allowed to use front(). The functions would be trivial and are easily inlined by the compiler, so no performance penalty either. With the @property field syntax, the change would become even more trivial.
+
+UFCS properties, should be pretty rare and mostly for arrays, the ones that do exist seem to be mostly of the ref returning type or being read-only, so simply remove the @property. The ones that actually are of the set/get type should either be changed to members of an actually wrapping struct or if encapsulation is not desired, changed to a function returning ref. For UFCS properties which are not for arrays, they should simple become a part of the struct/class they belong to.
+
+Generic code won't break: It can use optional parentheses, but does not have to. Calling a delegate returned by a function/property function is always:
+<syntaxhighlight lang="d">
+front()();
+</syntaxhighlight>
+
+For functions marked with @property in an illegal way according to this DIP, the compiler will simply ignore the invalid @property annotation and will issue a deprecation warning.
+
+== Conclusion ==
+Instead of introducing a new language construct, that tries to mimic fields and be distinguished from functions, this DIP raises the question why do we actually want that? Just because of ranges? Or in particular, just because we want to support ranges of this kind:
+<syntaxhighlight lang="d">
+struct MyRange {
+ enum front=8;
+ enum empty=false;
+ void popFront() {}
+}
+</syntaxhighlight>
+
+I don't think that this is actually worth the trouble, considering how often ranges are really implemented in such a way, and only makes it necessary to mark all kind of things with @property just so that () are not allowed on them to ensure compatibility with another corner case, namely functions/properties returning a delegate/function.
+
+
+Properties should not be a means for hiding functions, they should be about hiding fields.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

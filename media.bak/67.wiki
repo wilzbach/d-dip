@@ -1,0 +1,78 @@
+{| class="wikitable"
+!Title:
+!'''Associative Ranges'''
+|-
+|DIP:
+|67
+|-
+|Version:
+|1
+|-
+|Status:
+|'''Rejected'''
+|-
+|Created:
+|2014-10-28
+|-
+|Last Modified:
+|2014-10-31
+|-
+|Author:
+|Freddy "superstar64" Cubas
+|-
+|Links:
+|
+[https://github.com/D-Programming-Language/phobos/pull/2646 Pull request for phobos]
+|}
+
+== Abstract ==
+Introduce Associative ranges and lazy associative ranges to phobos.
+A associative range is a user defined container that has all the features of a build-in associative array.
+A lazy associative range is a sub set of a associative with only a index operator(of any type)
+== Rationale ==
+Allow abtraction of hashmaps with ranges.
+
+== Description ==
+An associative range must have:
+A '''byKey''' attribute that returns an input range of keys,
+A '''byValue''' attribute that returns an input range of values,
+'''byKey''' and '''byValue''' must be align to the same Pair when iterating.
+An index operator that takes a key and returns a value.
+An in operator that takes a key and returns a value pointer(or a user defined type that acts like one) or null if it doesn't exist.
+
+A lazy associative range must have:
+An alias to the key type "'''KeyType'''"
+An alias to the value type "'''ValueType'''"
+An index operator that takes a key type and returns value.
+
+== Usage ==
+<syntaxhighlight lang="d">
+import std.range;
+struct AssociativeRange
+{
+    InputRange!float byKey;
+    InputRange!uint byValue;
+    uint opIndex(float);
+    const (uint)* opBinaryRight(string op)(float) if(op=="in");
+}
+static assert(isAssociativeRange!AssociativeRange);
+alias K=ElementKeyType!AssociativeRange;
+alias V=ElementValueType!AssociativeRange;
+</syntaxhighlight>
+<syntaxhighlight lang="d">
+import std.range;
+struct LazyAssociativeRange
+{
+    alias KeyType=double;
+    alias ValueType=float;
+    float opIndex(double);
+}
+static assert(isLazyAssociativeRange!LazyAssociativeRange);
+alias K=ElementKeyType!LazyAssociativeRange;
+alias V=ElementValueType!LazyAssociativeRange;
+</syntaxhighlight>
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

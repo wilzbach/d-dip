@@ -1,0 +1,56 @@
+{| class="wikitable"
+!Title:
+! "dlib" in druntime
+|-
+|DIP:
+|58
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2014-04-11
+|-
+|Last Modified:
+|2014-04-11
+|-
+|Author:
+|[[user:Monarchdodra]]
+|-
+|Links:
+| [http://forum.dlang.org/post/xiofvuktricobthxyzyn@forum.dlang.org initial forum discussion]
+|}
+
+== Abstract ==
+Create a "core.dlib" library to druntime. It would provide functions that are equivalent to what can be found in C's runtime library. Particularly: <string.h>
+
+== Rationale ==
+C's runtime library is powerful, but *very* unsafe, and hard to use in a generic fashion. Having functions with a D interface can add safe bounds checking, no type casting, and CTFE.
+
+== Description ==
+The basic idea is to have an equivalent of function which are useful, but hard to use in a safe manner:
+* malloc => T[] malloc(T)(size_t howMany) @system;
+* calloc => T[] calloc(T)(size_t howMany) @safe;
+* memcpy => void memcpy(T)(T[] dest, T[] source); //infered.
+* memmove => void memmove(T)(T[] dest, T[] source); //infered
+* memcmp => void memcmp(T)(T[] dest, T[] source) @safe;
+* memchr => void memchr(T)(T[] data, ref T what) @safe;
+* memset => void memset(T)(T[] data, ref T what); //infered
+* ...
+
+Extra functions could also be added, on a "need to have" basis. For example, memset0 could be introduced to 0 out some memory. This would be guaranteed safe.
+
+== Thougts ==
+This is a *very* rough first draft. It will be updated per feedback. For example, I'm currently unsure *when* memmove should be safe: When no CC? When no indirection? When not both? When neither?
+
+Library name ("core.dlib") is up to debate.
+
+Location: druntime/phobos is also up to debate (placing in druntime is probably more convenient, but implementations may require some template magic from traits.d/typetuple.d
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

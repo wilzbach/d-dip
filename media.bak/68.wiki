@@ -1,0 +1,64 @@
+{| class="wikitable"
+!Title:
+!'''Add @nogc attribute on types'''
+|-
+|DIP:
+|1
+|-
+|Version:
+|3
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2014-11-10
+|-
+|Last Modified:
+|2014-11-10
+|-
+|Author:
+|Tomer Filiba
+|-
+|Links:
+|[http://forum.dlang.org/post/mssneozqixxesyklhdbg@forum.dlang.org @nogc on structs]
+|}
+
+== Abstract ==
+This DIP proposes the addition of a compiler-enforced <code>@nogc</code> attribute on types. This means means such a type cannot be allocated by the GC, e.g., using operator <code>new</code> on such a type or appending such a type to a dynamic array, would result in compile-time errors.
+
+It enforces separation between deterministic and non-deterministic finalization and lifetime of objects, which is crucial for proper RAII idiom.
+
+== Rationale ==
+Implementing RAII properly requires deterministic resource management, thus objects managed by the GC cannot be safely used for such purposes. The GC offers little to no guarantees on when (or even whether) destructors be called, or the order in which resources are released. It is clear one cannot rely on GC-managed objects for RAII. It would be suggested, therefore, that objects implementing the RAII idiom be stack-allocated structs (rather than classes, etc), which is necessary but not sufficient -- as long as one cannot enforce that such structs do not enter the GC heap.
+
+The purpose of this DIP is exactly that -- to designate structs (and possible other types, such as <code>emplaced</code> classes) as types that must not be allocated and managed by the GC. Any object with a non-deterministic life-time (i.e., GC-managed) will not be able to hold <code>@nogc</code> types, thus ensuring RAII is preserved.
+
+== Description ==
+Like <code>@nogc</code> on functions, <code>@nogc</code> on structs is transitive (albeit in the reverse direction): if struct <code>A</code> holds a member of type <code>B</code>, and <code>B</code> is marked <code>@nogc</code>, then <code>A</code> inherits the <code>@nogc</code>. Pointers to such types are allowed in any context.
+
+A complementary attribute, e.g., <code>__traits(isNoGC, T)</code> or <code>__traits(getTypeAttributes, T)</code> would be needed for reflection.
+
+== Usage ==
+
+<syntaxhighlight lang="D">
+@nogc struct MyStruct {
+    int x;
+    string y;
+}
+
+void foo() {
+    MyStruct ms;                 // compiles
+    auto ms2 = new MyStruct();   // does not compile
+    MyStruct[] arr; 
+    arr ~= MyStruct();           // does not compile
+
+    auto ms3 = cast(MyStruct*)malloc(MyStruct.sizeof);  // this is fine, of course
+}
+</syntaxhighlight>
+
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

@@ -1,0 +1,71 @@
+{| class="wikitable"
+!Title:
+!'''Interface specifications for aggregate types'''
+|-
+|DIP:
+|48
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-09-08
+|-
+|Last Modified:
+|2013-09-08
+|-
+|Author:
+|Simen Kjærås
+|}
+
+== Abstract ==
+
+An interface specification is a complete list of implemented functions of an aggregate type.
+
+== Rationale ==
+
+It may at times be hard to get a full overview of the implemented interface of a class, to find which member functions are there and what their exact signatures are. While an interface may put a lower limit on the implemented member functions, additional functions may be implemented willy-nilly.
+
+This DIP seeks to solve one of the main problems addressed by [[DIP47]], albeit by a different route.
+
+== Syntax ==
+
+Interface specifications add an optional section to aggregate types:
+
+<syntaxhighlight lang="d">
+class C {
+    // Declaration
+    interface {
+        this(float)
+        int foo();
+        void bar(ref int n);
+    }
+    // Definition
+    this(float f) {
+    }
+    int foo() {
+        return 3;
+    }
+    void baz(ref int n) {
+    }
+}
+</syntaxhighlight>
+
+== Semantics ==
+
+# Parameter names may be omitted in the declaration, but must otherwise match those in the definition.
+# Types, parameter types, attributes, and UDAs in declaration must be present in both locations.
+# Default parameter values must be repeated in both locations or not at all.
+# It is an error for @safe/@trusted/@system, private/package/public/export access, linkage and storage classes to differ between declaration and definition.
+
+== Existing Code ==
+
+Interface specifications will not break any existing code.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

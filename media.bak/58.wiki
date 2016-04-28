@@ -1,0 +1,159 @@
+{| class="wikitable"
+!Title:
+!'''".." as a Binary Operator'''
+|-
+|DIP:
+|58
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2014-03-16
+|-
+|Last Modified:
+|2014-03-16
+|-
+|Author:
+|Mason McGill
+|}
+
+== Abstract ==
+Making ".." a binary operator allows multidimensional indexing, terse range construction, and other features especially useful for scientific and engineering applications, while reducing language complexity and preserving backwards compatibility.
+
+== Rationale ==
+One of D's design goals is to "cater to the needs of numerical analysis programmers".  To that end, D already has some syntax to support MATLAB/Python/Julia/R-style multidimensional array manipulation: IndexExpression, SliceExpression, and "$".  However, the ability to tersely express numeric ranges arguably makes languages like Julia more usable for "vectorized" numerical programming than D.  Making ".." a binary operator would enable this functionality, and improve the usability of numerical APIs.
+
+== Proposal ==
+=== Grammar ===
+SliceExpression and ForeachRangeStatement are removed from the language.  CaseRangeStatement remains unchanged.
+
+Code in the form <code>Expression1 .. Expression2</code> is parsed as a ToExpression (<code>a..b</code> can be read "a to b").  ".." has the lowest operator precedence of any binary operator.
+
+=== Resolving ToExpression ===
+A ToExpression is delegated to the arguments if they implement "opBinary" or "opBinaryLeft" for the ".." operator.  Otherwise, it  yields a structure that can be used in an IndexExpression or ForeachStatement to replicate the semantics of a SliceExpression or ForeachRangeExpression.
+
+<syntaxhighlight lang="d">
+auto __evaluateToExpression(Left, Right)(Left left, Right right)
+{
+    static if (__traits(compiles, left.opBinary!".."(right)))
+        return left.opBinary!".."(right);
+    else static if (__traits(compiles, right.opBinaryRight!".."(left)))
+        return right.opBinaryRight!".."(left);
+    else
+        return BoundedRange!(Left, Right)(left, right);
+}
+
+struct BoundedRange(Front, Back)
+{
+    Front front;
+    Back back;
+
+    static if (is(typeof(front >= back) : bool))
+        bool empty() { return front >= back; }
+
+    static if (__traits(compiles, front++))
+        void popFront() { front++; }
+
+    /* Other range operations, if supported. */
+
+    /* If supported, an `opBinary` method is defined to allow strided
+       ranges to be created using "start..step..stop" syntax. */
+}
+</syntaxhighlight>
+
+This behavior can be changed in a non-backwards-compatible release to make ".." behave analogously to other binary operators (refusing to compile if a matching "opBinary" or "opBinaryRight" isn't defined).
+
+=== Changes to the resolution of IndexExpression ===
+An IndexExpression that would previously have been parsed as a SliceExpression first attempts to delegate to "opSlice".  Failing that, it delegates to "opIndex".  Index-assignment, index-op-assignment, and index-unary operations are handled analogously.  This is similar to the route Python took when changing its [http://docs.python.org/2/reference/datamodel.html#additional-methods-for-emulation-of-sequence-types indexing/slicing semantics].
+
+<syntaxhighlight lang="d">
+auto __evaluateIndexExpression(Base, Indices...)(Base base, Indices indices)
+{
+    enum is0ArgSlice = !indices.length;
+    enum is2ArgSlice = is(indices[0] == BoundedRange!(F, B), F, B);
+
+    static if (is2ArgSlice)
+        auto front = indices[0].front, back = indices[0].back;
+
+    static if (is0ArgSlice && __traits(compiles, base.opSlice())
+        return base.opSlice();
+    else static if (is2ArgSlice && __traits(compiles, base.opSlice(front, back))
+        return base.opSlice(front, back);
+    else
+        return base.opIndex(indices);
+}
+</syntaxhighlight>
+
+These changes can be reverted in a non-backwards-compatible release to drop support for the "opSlice*" family of functions.
+
+== Usage ==
+=== Multidimensonal Slicing ===
+<syntaxhighlight lang="d">
+const submatrix = matrix[0..5, 1..3];
+matrix[0..5, 1..3] *= 2;
+</syntaxhighlight>
+
+=== Strided Slicing/Iteration ===
+<syntaxhighlight lang="d">
+const oddEntries = vector[0..2..10];       // Built-in.
+const evenEntries = vector[(1..11).by(2)]; // Library-defined.
+
+writeln(array(0..2..10)); // Prints [0, 2, 4, 6, 8].
+</syntaxhighlight>
+
+=== Slice Forwarding ===
+<syntaxhighlight lang="d">
+auto addSlices(A, B, Indices...)(A a, B b, Indices indices)
+  { return a[indices] + b[indices]; }
+
+addSlices(matrix1, matrix2, 0..3, 1..4);
+</syntaxhighlight>
+This is especially important for wrapping/subclassing sophisticated multidimensional data structures.
+
+=== Terse Constant Declaration ===
+<syntaxhighlight lang="d">
+enum size = [150.cm .. 200.cm, 25.cm .. 50.cm];
+enum orientation = -30.deg .. 30.deg;
+
+detectPedestrians(size, orientation);
+</syntaxhighlight>
+
+=== Defining Multidimensional Grids ===
+<syntaxhighlight lang="d">
+const inputSpace = meshgrid(0..100, 0..100);
+plot(inputSpace, someFunction(inputSpace));
+</syntaxhighlight>
+<code>meshgrid</code>, as implemented in [http://www.mathworks.com/help/matlab/ref/meshgrid.html MATLAB] and [http://docs.scipy.org/doc/numpy/reference/generated/numpy.meshgrid.html NumPy], constructs a multidimensional range from a list of 1-dimensional ranges.
+
+=== Simulating Physics ===
+<syntaxhighlight lang="d">
+const line = Point(1, 2, 3)..Point(3, 2, 1);
+const bounds = Box(1..3, 2..4, 3..6);
+const collision = bounds.contains(line);
+</syntaxhighlight>
+
+=== Parsing Text ===
+<syntaxhighlight lang="d">
+const letters = 'a'..'z';
+const numbers = '0'..'9';
+
+find(letters ~ numbers, userInput);
+</syntaxhighlight>
+
+=== Handling Dates/Times ===
+<syntaxhighlight lang="d">
+const vacation = july(10, 2014)..july(15, 2014);
+
+foreach (day; monday..friday)
+    if (!vacation.contains(day))
+        work(day);
+</syntaxhighlight>
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

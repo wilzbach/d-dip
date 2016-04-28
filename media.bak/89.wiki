@@ -1,0 +1,104 @@
+{| class="wikitable"
+!Title:
+!'''@mutable members in immutable data structures'''
+|-
+|DIP:
+|85
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2016-02-21
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Marc Schütz
+|-
+|Links:
+|[https://forum.dlang.org/post/uilqvjlvkuvayygjnyen@forum.dlang.org Forum thread]
+|}
+
+== Abstract ==
+This DIP proposes an officially sanctioned way to mutate members in immutable data structures.
+
+== Rationale ==
+D's <code>immutable</code> signifies - in constrast to C++'s <code>const</code> - physical immutability, i.e. a guarantee that memory occupied by immutable variables will never change during their lifetime. This contrasts with logical immutability, which means that the underlying memory can change as long as the object represented by it remains semantically unchanged. Applications of logical immutability include lazy initialization, mutexes, reference counters or other embedded house-keeping data, as well as members changed for debugging purposes.
+
+Because D's <code>immutable</code> is as strict as it is (casting it away results in undefined behaviour), and <code>const</code> data may actually be <code>immutable</code>, in order to use the above-mentioned techniques, variables must either be mutable (which, because of <code>const</code> and <code>immutable</code>'s transitivity implies that many other variables and parameters cannot be marked as <code>const</code> either), or storing the mutable parts outside of the structures, which has considerable complexity, runtime and memory overhead, and can even be unsafe in combination with implicit sharing of <code>immutable</code> data (see below).
+
+With the proposed change, logical immutability (i.e. no changes are observable from the outside) can be achieved without provoking undefined behaviour while still having some basic statically enforced safety.
+
+== Description ==
+A new annotation <code>@mutable</code> for member variables and aggregate types is proposed. It is neither a type constructor, nor a storage class; it can be implemented as a compiler-recognized UDA. A member annotated as <code>@mutable</code> triggers the following behaviours:
+
+# It is required to be <code>private</code>
+# Access to it is <code>@system</code>
+# No static immutable objects with a <code>@mutable</code> member may be created
+# Dynamically created immutable objects with <code>@mutable</code> members are allowed if all <code>@mutable</code> members are marked as <code>shared</code> (analogously for implicit conversion of unique objects to immutable)
+
+These rules are enforced statically. Rationale for the rules:
+
+* The first rule (<code>private</code>) enforces encapsulation. This is the basic property of logical const-ness: an observer must never observe a change to an immutable object.
+* The second rule (<code>@system</code>) prevents accidental accesses that violate the above guarantee. This includes not just actual mutation of <code>@mutable</code> members, but even reads from them, because these can leak changed data to the outside. (If desired, this rule can be relaxed: reads in non-pure methods can be @safe.)
+* The third rule (no static immutables) is necessary because static immutable objects could be placed in physically read-only memory by the linker and therefore cannot be modified. Even though existing memory can be made read-only after initialization (using system calls like <code>mmap(2)</code>), doing this is not supposed to be prevented by the type system, because the <code>mmap</code>ed region can just as well contain normal mutable data.
+* The fourth rule (<code>shared</code>) prevents race conditions for implicitly shared immutable objects. Access to shared <code>@mutable</code> members must be atomic or otherwise synchronized.
+
+The compiler needs to make sure not to apply optimizations based on the assumption that a <code>@mutable</code> member never changes. Because D supports opaque data structures (<code>struct S;</code>), the <code>@mutable</code> annotation can also be attached to struct declarations: <code>@mutable struct S;</code>.
+
+To enable introspection, two traits are added: <code>isMutable</code>, and <code>hasMutableMembers</code>. The latter determines whether a types contains any mutable members, either directly, or embedded through another member.
+
+== Usage ==
+<source lang="D">
+struct S {
+    @safe int expensiveComputation();
+    private @mutable int bar_;
+    @trusted @property bar() const {
+        if(!bar_)
+            bar_ = expensiveComputation();
+        return bar_;
+    }
+}
+</source>
+
+==About the AA solution==
+It has been proposed to place the mutable members into an external associate array, with the object as a key. This approach is surprisingly complex: not only does it have a considerable computational and memory cost (including caching effects), it also requires lifetime management of the AA's values.
+
+Additionally, it can have unexpected effects with shared objects (including immutable ones, which are implicitly shareable): while strictly speaking, it doesn't really violate safety by itself, it can have surprising consequences that the compiler is unable to guard against, because the associative array and the objects themselves can have non-matching shared-ness, as there is no formal relationship between the two. Take a reference counted immutable object as an example:
+
+<source lang="D">
+int[const(RCObject)] refcounts;
+struct RCObject {
+    @disable this();
+    static make() {
+        immutable(RCObject) result;
+        refcounts[result] = 1;
+        return result;
+    }
+    this(this) immutable {
+        refcounts[this]++;
+    }
+    ~this() immutable {
+        if(--refcounts[this] == 0)
+             releaseResources();
+    }
+}
+void foo() {
+    immutable(RCObject) o = RCObject.make();
+    send(otherTid, o);
+}
+</source>
+
+Because <code>refcounts</code> in the example above is not marked as shared, it will be a thread-local instance. An immutable object sent to another thread will not have an entry in that thread's AA. The correct solution in this case would be to make the AA <code>shared</code> and to use atomic operations on its values. On the other hand, if it's guaranteed that the objects never cross a thread-boundary, the code is sufficient as-is. Unfortunately, the compiler cannot enforce the correct solution here.
+
+Now, using the changes proposed in this DIP, the code can be made safe by providing a shareable and a thread-local implementation of <code>RCObject</code>. Should the user choose the wrong one, the compiler will reject it because of rule 4.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

@@ -1,0 +1,219 @@
+== DIP84: Static Inheritance ==
+
+{| class="wikitable"
+!Title:
+!''Static Inheritance''
+|-
+|DIP:
+|84
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2015-10-30
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Atila Neves
+|}
+
+== Abstract ==
+
+Express intent to the compiler that a user-defined type conforms to a static interface.
+
+
+== Rationale ==
+
+Currently, D uses template constraints as a means of restricting the types a template function/struct/class can be instantiated with. Common examples are <code>isInputRange!R</code> and <code>isOutputRange!(R, E)</code>. It is also common to statically assert that a user-defined type satisfies the template constraint predicate:
+
+<syntaxhighlight lang=D>
+struct Struct
+{
+    //...
+    static assert(isInputRange!Struct);
+}
+</syntaxhighlight>
+
+
+While this works, when the static assertion fails there is no help from the compiler to guide the developer to fix the error. This is in stark constrast to runtime polymorphism, where:
+
+<syntaxhighlight lang=D>
+interface Interface
+{
+    void foo();
+}
+
+class Class : Interface
+{
+    //... no foo here
+}
+</syntaxhighlight>
+
+yields a compiler error message indicating that <code>void foo() is not implemented</code>. Similarly, it is not possible to instantiate a class with unimplemented abstract functions without getting an equivalent error.
+
+This DIP attempts to make static polymorphism as easy to adhere to as the more well-known and established runtime variety. This is particularly important for D due to the emphasis on the former with respect to other languages.
+
+== Description ==
+
+This DIP proposes a backwards-compatible change to the language so that it becomes possible for classes and structs to "inherit" from a template constraint predicate. Since classes can already inherit from interfaces and one class, the <code>static</code> keyword would be added to distinguish:
+
+<syntaxhighlight lang=D>
+class Class : static isInputRange
+{
+    //...
+}
+</syntaxhighlight>
+
+Structs can't currently inherit and so wouldn't need <code>static</code>. However, it might be preferable to require it anyway for parity with classes:
+
+<syntaxhighlight lang=D>
+struct Struct : isInputRange // or struct Struct : static isInputRange
+{
+   //...
+}
+</syntaxhighlight>
+
+Static inheritance would only be syntatically valid if the right-hand side of the colon is equivalent to a template of the form:
+
+<syntaxhighlight lang=D>
+template Predicate(T) {
+    enum Predicate = is(typeof(() { /*code*/ }));
+}
+</syntaxhighlight>
+
+The enclosed lambda would be allowed to have default arguments. Since templates must be visible, the compiler would have access to the code block inside the lambda. This is essential for the diagnostics.
+
+In the case of multiple template arguments for the predicate, as is the case for <code>isOutputRange</code>, all but the first would be omitted for the static inheritance:
+
+<syntaxhighlight lang=D>
+struct Struct: isOutputRange!(int)
+{
+    //...
+}
+</syntaxhighlight>
+
+And the predicate must have N + 1 arguments:
+
+<syntaxhighlight lang=D>
+enum Predicate(T, U) { /*...*/ }
+</syntaxhighlight>
+
+== Implementation ==
+
+Assuming that the static inheritance is syntatically valid as described above, the compiler would lower the struct/class definition from:
+
+<syntaxhighlight lang=D>
+struct Struct: Predicate
+{
+    //...
+}
+</syntaxhighlight>
+
+to:
+
+<syntaxhighlight lang=D>
+struct Struct
+{
+   //as before
+
+   //added by the compiler:
+   static if(!Predicate(Struct))
+   {
+       auto failFunc(/* same args as lambda*/)
+       {
+           //insert code inside the lambda, substituting the types accordingly
+       }
+   }
+}
+</syntaxhighlight>
+
+In case the predicate has more than one template argument, it would go from:
+
+<syntaxhighlight lang=D>
+struct Struct : Predicate!(T...)
+{
+    //...
+}
+</syntaxhighlight>
+
+to:
+
+<syntaxhighlight lang=D>
+struct Struct
+{
+   static if(!Predicate(Struct, T))
+   {
+       auto failFunc(/* same args as lambda*/)
+       {
+           //insert code inside the lambda, substituting the types accordingly
+       }
+   }
+}
+</syntaxhighlight>
+
+It would be best to change the line numbers reported in the resulting error messages to be changed to the line where the static inheritance is declared.
+
+Alternatively, a new compiler trait __traits(compilesNoSuppress) could be used. It would work the same way as __traits(compiles) but would print out error messages when compilation failed. In that case, the first example would be lowered to:
+
+
+<syntaxhighlight lang=D>
+static assert(__traits(compilesNoSupress, isInputRange!Struct));
+struct Struct
+{
+    //as before
+}
+</syntaxhighlight>
+
+This has the immediate advantage of not requiring any line number changes.
+
+== Examples of lowering ==
+
+For <code>isInputRange</code>, the original definition is shown followed by the lowering:
+
+<syntaxhighlight lang=D>
+struct In: isInputRange { }
+
+struct In
+{
+    static if(!isInputRange!(In))
+    {
+        auto failFunc(inout int = 0)
+        {
+            In r = In.init;
+            if (r.empty) {}
+            r.popFront();
+            auto h = r.front;
+        };
+    }
+}
+</syntaxhighlight>
+
+For <code>isOutputRange</code>:
+
+<syntaxhighlight lang=D>
+struct Out: isOuputRange!int { }
+
+struct Out
+{
+    static if(!isOutputRange!(Out, int))
+    {
+        auto failFunc(inout int = 0)
+        {
+            Out r = Out.init;
+            int e = int.init;
+            put(r, e);
+        }
+    }
+}
+</syntaxhighlight>
+
+== Improvements ==
+
+Instead of relying on compilation errors from the code copied from the lambda, it should be possible to generate even better
+compiler errors for well-known types from the standard library.

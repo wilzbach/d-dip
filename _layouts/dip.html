@@ -6,9 +6,7 @@ layout: default
 
 <div class="subnav">
     <div class="head">
-        <h2>DIPs</h2>
-        <p class="subnav-duplicate"><a href="../spec/spec.html">table of contents</a>
-        </p>
+		<a href="{{site.baseurl}}"><h2>DIPs</h2></a>
     </div>
 
     <ul>
@@ -16,7 +14,7 @@ layout: default
  {% for page in pages %}
     {% if page.layout == "dip" %}
         <li>
-			<a href='{{ page.url }}'>DIP {{page.nr}}</a>
+			<a href='{{site.baseurl}}{{ page.url }}'>DIP {{page.nr}}: {{page.title | truncate: 22, '..'}}</a>
         </li>
   {% endif %}
   {% endfor %}
@@ -36,7 +34,7 @@ layout: default
 
 
             <div class="tip smallprint">
-				<a href="https://github.com/wilzbach/d-dip/issues/edit/gh-pages/{{page.path}}">Improve this page</a>
+				<a href="https://github.com/wilzbach/d-dip/edit/gh-pages/{{page.path}}">Improve this page</a>
 
                 <div>
                     Quickly fork, edit online, and submit a pull request for this page. Requires a signed-in GitHub account. This works well for small changes. If you'd like to make larger changes you may want to consider using a local clone.
@@ -47,6 +45,23 @@ layout: default
 
 
     <h1>{{page.title}}</h1>
+
+	<table>
+		<tr><td>Version </td><td>{{ page.version}}</td></tr>
+		<tr><td>Created </td><td>{{ page.created }}</td></tr>
+		<tr><td>Status</td><td>{{ page.status}}</td></tr>
+		<tr><td>Last modified </td><td>{{ page.last-modified}}</td></tr>
+		<tr><td>Author </td><td>{{ page.author}}</td></tr>
+		{% if page.links %}
+		<tr><td>Links</td><td>{{ page.links}}</td></tr>
+		{% endif %}
+		{% if page.breaks %}
+		<tr><td>Breaks</td><td>{{ page.breaks}}</td></tr>
+		{% endif %}
+		{% if page.load %}
+		<tr><td>Load</td><td>{{ page.load}}</td></tr>
+		{% endif %}
+	</table>
 
 	{{ content }}
 

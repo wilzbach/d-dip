@@ -1,0 +1,633 @@
+{| class="wikitable"
+!Title:
+!'''Implement scope for escape proof references'''
+|-
+|DIP:
+|69
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2014-12-04
+|-
+|Last Modified:
+|2014-12-04
+|-
+|Authors:
+|Marc Sch&uuml;tz, deadalnix, Andrei Alexandrescu and Walter Bright
+|-
+|Links:
+|'''Proposals'''
+* [http://wiki.dlang.org/User:Schuetzm/scope Scope Proposal by Marc Sch&uuml;tz. The above document is derived from this one.]
+* [http://wiki.dlang.org/DIP36 DIP36: Scope References by Dicebot]
+* [http://wiki.dlang.org/DIP35 DIP35: Addition to DIP25: Sealed References by Zach Tollen]
+* [http://wiki.dlang.org/DIP25 DIP25: Sealed References by Andrei Alexandrescu and Walter Bright]
+|'''Discussions'''
+* [http://forum.dlang.org/post/m5p99m$luk$1@digitalmars.com Discussion about this proposal]
+* [http://www.digitalmars.com/d/archives/digitalmars/D/Why_is_scope_planned_for_deprecation_247445.html Why is scope planned for deprecation?]
+* [http://www.digitalmars.com/d/archives/digitalmars/D/RFC_scope_and_borrowing_240834.html RFC: scope and borrowing]
+* [http://www.digitalmars.com/d/archives/digitalmars/D/borrowed_pointers_vs_ref_232090.html borrowed pointers vs ref]
+* [http://www.digitalmars.com/d/archives/digitalmars/D/Proposal_for_design_of_scope_Was_Re_Opportunities_for_D_236686.html Proposal for design of scope]
+* [http://www.digitalmars.com/d/archives/digitalmars/D/Re_Proposal_for_design_of_scope_Was_Re_Opportunities_for_D_236705.html Proposal for the design of scope pt 2]
+* [http://www.digitalmars.com/d/archives/digitalmars/D/scope_escaping_222858.html scope escaping]
+|}
+
+
+=== Abstract ===
+
+A garbage collected language is inherently memory safe. References to data can be passed
+around without concern for ownership, lifetimes, etc. But this runs into difficulty when
+combined with other sorts of memory management, like stack allocation, malloc/free allocation,
+reference counting, etc.
+
+Knowing when the lifetime of a reference is over is critical for safely implementing memory
+management schemes other than tracing garbage collection. It is also critical for the performance of reference
+counting systems, as it will expose opportunities for elision of the inc/dec operations.
+
+<tt>scope</tt> provides a mechanism to guarantee that a reference cannot
+escape lexical scope.
+
+=== Benefits ===
+
+* References to stack variables can no longer escape.
+* Delegates currently defensively allocate closures with the GC. Few actually escape, and with <tt>scope</tt> only those that actually escape need to have the closures allocated.
+* <tt>@system</tt> code like <tt>std.internal.scopebuffer</tt> can be made <tt>@safe</tt>.
+* Reference counting systems need not adjust the count when passing references that do not escape.
+* Better self-documentation of encapsulation.
+
+=== Definitions ===
+
+==== Visibility vs. lifetime ====
+
+For each value <tt>v</tt> within a program we define the notion of <i>lexical visibility</i> denoted as <tt>visibility(v)</tt>, akin to the lexical extent through which the value can be accessed.
+* For an rvalue, the visibility is the expression within it is used.
+* For a named variable in a scope, the visibility is the lexical scope of the variable per the language rules.
+* For a module-level variable, visibility is considered infinite. Notation: <tt>visibility(v) = &infin;</tt>.
+
+Due to language scoping rules, visibilities cannot partially intersect or "cross": for any two values, either they are not simultaneously visible at all, or one's visibility is included within the other's. We define a partial order among visibilities: <tt>visibility(v1) <= visibility(v2)</tt> if <tt>v2</tt> is visible through all portions of program when <tt>v1</tt> is visible (including the case where both values have infinite visibilities). If two variables have disjoint visibilities, they are unordered.
+
+We also define <i>lifetime</i> for each value, which is the extent during which a value can be safely used.
+* For types without indirections such as <tt>int</tt>, visibility and lifetime are equal for rvalues and lvalues.
+* For all global and <tt>static</tt> variables, lifetime is infinite.
+* For values allocated on the garbage collected heap, lifetime is infinite whilst visibility is dependent on the references in the program bound to those values.
+* For an unrestricted pointer, visibility is dictated by the usual lexical scope rules. Lifetime, however is dictated by the lifetime of the data to which the pointer points to.
+
+Examples:
+
+<syntaxhighlight lang=D>
+void fun1() {
+    int x; // starting here, x becomes visible and also starts "living"
+    int y = x + 42; // lifetime(42) and visibility(42) last through the initialization expression
+    ...
+   // lifetime(y) and visibility(y) end here, just before those of x
+   // lifetime(x) and visibility(x) end here
+}
+
+void fun2() {
+    int * p; // visibility(p) occurs from here through the end of the function
+    // at this point lifetime(p) is infinite because it is null and lifetime(null) is infinite
+    if (...) {
+        int x;
+        p = &x; // lifetime(p) is now equal to lifetime(x)
+    }
+    // here lifetime(p) may have ended but p is still visible
+}
+</syntaxhighlight>
+
+If a value is visible but its lifetime has ended, the program is in a dangerous, albeit not necessarily incorrect state. The program becomes undefined if the value of which lifetime has ended is actually used. 
+
+This proposal ensures statically that variables in <tt>@safe</tt> code with the <tt>scope</tt> storage class have a lifetime that includes their visibility, so they are safe to use at all times.
+
+By consequence of the above, inside a function:
+* Parameters passed by <tt>ref</tt> or <tt>out</tt> are conservatively assumed to have lifetime somewhere in the caller's scope;
+* Parameters passed by value have shorter lifetime than those passed by passed by <tt>ref</tt>/<tt>out</tt>, but longer than any locals defined by the function. The lifetimes of by-value parameters are ordered lexically.
+
+==== Algebra of Lifetimes ====
+
+Certain expressions create values of which lifetime is in relationship with the participating value lifetimes, as follows:
+
+<table border=1 cellpadding=4 cellspacing=0>
+<tr><th>'''expression'''</th><th>'''lifetime'''</th><th>'''notes'''</th></tr>
+<tr><td><tt>&amp;e</tt></td><td>lifetime(e)</td><td></td></tr>
+<tr><td><tt>&amp;*e</tt></td><td>lifetime(e)</td><td></td></tr>
+<tr><td><tt>e + integer</tt></td><td>lifetime(e)</td><td>Applies only when <tt>e</tt> is a pointer type</td></tr>
+<tr><td><tt>e - integer</tt></td><td>lifetime(e)</td><td>Applies only when <tt>e</tt> is a pointer type</td></tr>
+<tr><td><tt>*e</tt></td><td>&infin;</td><td>lifetime is not transitive</td></tr>
+<tr><td><tt>e1, e2</tt></td><td>lifetime(e2)</td><td></td></tr>
+<tr><td><tt>e1 = e2</tt></td><td>lifetime(e1)</td><td></td></tr>
+<tr><td><tt>e1 op= e2</tt></td><td>lifetime(e1)</td><td></td></tr>
+<tr><td><tt>e1 ? e2 : e3</tt></td><td>min(lifetime(e2), lifetime(e3))</td><td></td></tr>
+<tr><td><tt>e++</tt></td><td>lifetime(e)</td><td>Applies only when e is a pointer type. This has academic value only because pointer increment is disallowed in <tt>@safe</tt> code.</td></tr>
+<tr><td><tt>e--</tt></td><td>lifetime(e)</td><td>Applies only when e is a pointer type. This has academic value only because pointer decrement is disallowed in <tt>@safe</tt> code.</td></tr>
+<tr><td><tt>cast(T) e</tt></td><td>lifetime(e)</td><td>Applies only when both <tt>T</tt> and <tt>e</tt> have pointer type.</td></tr>
+<tr><td><tt>new</tt></td><td>&infin;</td><td>Allocates on the GC heap.</td></tr>
+<tr><td><tt>e.field</tt></td><td>lifetime(e)</td><td></td></tr>
+<tr><td><tt>e.func(args)</tt></td><td></td><td>See section dedicated to discussing methods.</td></tr>
+<tr><td><tt>func(args)</tt></td><td></td><td>See section dedicated to discussing functions.</td></tr>
+<tr><td><tt>e[]</tt></td><td>lifetime(e)</td><td></td></tr>
+<tr><td><tt>e[i..j]</tt></td><td>lifetime(e)</td><td></td></tr>
+<tr><td><tt>&e[i]</tt></td><td>lifetime(e)</td><td></td></tr>
+<tr><td><tt>e[i]</tt></td><td>&infin;</td><td></td></tr>
+<tr><td>''ArrayLiteral''</td><td>&infin;</td><td>Array literals are allocated on the GC heap</td></tr>
+<tr><td>''ArrayLiteral[constant]''</td><td>&infin;</td><td></td></tr>
+</table>
+
+=== Aggregates ===
+
+The following sections define <tt>scope</tt> working on primitive types (such as <tt>int</tt>) and pointers thereof (such as <tt>int*</tt>). This is without loss of generality because aggregates can be handled by decomposition as follows:
+
+* From a lifetime analysis viewpoint, a <tt>struct</tt> is considered a juxtaposition of its direct members. Passing a <tt>struct</tt> by value into a function is equivalent to passing each of its members by value. Passing a <tt>struct</tt> by <tt>ref</tt> is equivalent to passing each of its members by <tt>ref</tt>. Finally, passing a pointer to a <tt>struct</tt> is analyzed as passing a pointer to each of its members. Example:
+
+<syntaxhighlight lang="D">
+struct A { int x; float y; }
+void fun(A a); // analyzed similarly to fun(int x, float y);
+void gun(ref A a); // analyzed similarly to gun(ref int x, ref float y);
+void hun(A* a); // analyzed similarly to hun(int* x, float* y);
+</syntaxhighlight>
+
+* Lifetimes of statically-sized arrays <tt>T[n]</tt> is analyzed as if the array were a <tt>struct</tt> with <tt>n</tt> fields, each of type <tt>T</tt>.
+
+* Lifetimes of built-in dynamically-sized slices <tt>T[]</tt> are analyzed as <tt>struct</tt>s with two fields, one of type <tt>T*</tt> and the other of type <tt>size_t</tt>.
+
+* Analysis of lifetimes of <tt>class</tt> types is similar to analysis of pointers to <tt>struct</tt> types.
+
+* For <tt>struct</tt> members of aggregate type, decomposition may continue transitively.
+
+=== Fundamentals of <tt>scope</tt> ===
+
+The <tt>scope</tt> storage class ensures that the lifetime of a pointer/reference is a shorter of the lifetime of the referred object. Dereferencing through a <tt>scope</tt> variable is guaranteed to be safe.
+
+<tt>scope</tt> is a storage class, and affects declarations. It is not a type qualifier. There is no change to existing [http://dlang.org/attribute#scope <tt>scope</tt> grammar]. It fits in the grammar as a storage class.
+
+<tt>scope</tt> affects:
+
+* local variables allocated on the stack
+* function parameters
+* non-static member functions (applying to the <tt>this</tt> implicit parameter)
+* delegates (applying to their implicit environment)
+* return value of functions
+
+It is ignored for other declarations. It is ignored for declarations that have no indirections.
+
+<syntaxhighlight lang="D">
+scope enum e = 3;  // ignored, no indirections
+scope int i;       // ignored no indirections
+</syntaxhighlight>
+
+The <tt>scope</tt> storage class affects variables according to these rules:
+
+# A <tt>scope</tt> variable can only be initialized and assigned from values that have lifetimes longer than the variable's lifetime. (As a consequence a <tt>scope</tt> variable can only be assigned to <tt>scope</tt> variables that have shorter lifetime.)
+# A variable is inferred to be <tt>scope</tt> if it is initialized with a value that has a non-&infin; lifetime.
+# A <tt>scope</tt> variable cannot be initialized with the address of a <tt>scope</tt> variable.
+# A <tt>scope ref</tt> parameter can be initialized with another <tt>scope ref</tt> parameter&mdash;<tt>scope ref</tt> is idempotent.
+
+Examples for each rule:
+
+<syntaxhighlight lang="D">
+int global_var;
+int* global_ptr;
+ 
+void bar(scope int* input);
+ 
+void fun1() {
+    scope int* a = &global_var; // OK per rule 1, lifetime(&global_var) > lifetime(a)
+    a = &global_var;       // OK per rule 1, lifetime(&global_var) > lifetime(a)
+    int b;
+    a = &b; // Disallowed per rule 1, lifetime(&b) < lifetime(a)
+    scope c = &b; // OK per rule 1, lifetime(&b) > lifetime(c)
+    int* b;
+    a = b; // Disallowed per rule 1, lifetime(b) < lifetime(a)
+}
+
+void fun2() {
+    auto a = &global_var; // OK, b is a regular int*
+    int b;
+    auto c = &b; // Per rule 2, c has scope storage class 
+}
+
+void fun3(scope int * p1) {
+    scope int** p2 = &p1; // Disallowed per rule 3
+    scope int* p3;
+    scope int** p4 = &p3; // Disallowed per rule 3
+}
+
+void fun4(scope int * p1) {
+    bar(p1); // OK per rule 4
+}
+</syntaxhighlight>
+
+A few more examples combining the rules:
+
+<syntaxhighlight lang="D">
+int global_var;
+int* global_ptr;
+ 
+void bar(scope int* input);
+ 
+void foo() {
+    scope int* a;
+    a = &global_var;       // Ok, `global_var` has a greater lifetime than `a`
+    scope b = &global_var; // Ok, type deduction
+    int c;
+ 
+    if(...) {
+        scope x = a;       // Ok, copy of reference,`x` has shorter lifetime than `a`
+        scope y = &c;      // Ok, lifetime(y) < lifetime(& c)
+        int z;
+        b = &z;            // Error, `b` will outlive `z`
+        int* d = a;        // Ok: d is inferred to be `scope`
+    }
+ 
+    bar(a);                // Ok, scoped pointer is passed to scoped parameter
+    bar(&c);               // Ok, lifetime(parameter input) < lifetime(c)
+    int* e;
+    e = &c;                // Error, lifetime(e's view) is &infin; and is greater than lifetime(c)
+    a = e;                 // Ok, lifetime(a) < lifetime(e)
+    scope int** f = &a;    // Error, rule 4
+    scope int** h = &e;    // Ok
+    int* j = *h;           // Ok, scope is not transitive
+}
+
+void abc() {
+    scope int* a;
+    int* b;
+    scope ref int* c = a;  // Error, rule 5
+    scope ref int* d = b;  // Ok
+    int* i = a;            // Ok, scope is inferred for i
+    global_ptr = d;        // Error, lifetime(d) < lifetime(global_ptr)
+    global_ptr = i;        // Error, lifetime(i) < lifetime(global_ptr)
+    int* j;
+    global_ptr = j;        // Ok, j is not scope
+}
+</syntaxhighlight>
+
+=== Interaction of <tt>scope</tt> with the <tt>return</tt> Statement ===
+
+A value containing indirections and annotated with <tt>scope</tt> cannot be returned from a function.
+
+<syntaxhighlight lang="D">
+class C { ... }
+
+C fun1() {
+    scope C c;
+    ...
+    return c;   // Error
+}
+
+int fun2() {
+    scope int i;
+    ...
+    return i;   // Ok, i has no indirections
+}
+
+scope int* fun3() {
+    scope int* p;
+    return p;   // Error
+    return p+1; // Error, nice try!
+    return &*p; // Error, won't work either
+}
+
+ref int func(scope ref int r, scope out int s, ref int t)
+{
+    return r; // Error
+    return s; // Error, 'out' is treated like 'ref'
+    return t; // fine
+}
+</syntaxhighlight>
+
+=== Functions ===
+
+==== Inference ====
+
+<tt>scope</tt> is inferred for function parameters if not specified, under the same circumstances as <tt>pure</tt>, <tt>nothrow</tt>, <tt>@nogc</tt>,
+and <tt>@safe</tt> are inferred. Scope is not inferred for virtual functions.
+
+==== Overloading ====
+
+<tt>scope</tt> does not affect overloading. If it did, then whether a variable was scope or not would affect the code path, making
+scope inference impractical. It also makes turning scope checking on/off impractical.
+
+<syntaxhighlight lang="D">
+T func(scope ref T);
+T func(ref T);
+
+T t; func(t); // Error, ambiguous
+scope T u; func(u); // Error, ambiguous
+</syntaxhighlight>
+
+==== Implicit Conversion of Function Pointers and Delegates ====
+
+<tt>scope</tt> can be added to parameters, but not removed.
+
+<syntaxhighlight lang="D">
+alias int function(ref T) fp_t;
+alias int function(scope ref T) fps_t;
+
+int foo(ref T);
+int bar(scope ref T);
+
+fp_t fp = &bar;   // Ok, scope behavior is subset of non-scope
+fps_t fp = &foo;  // Error, fps_t demands scope behavior
+</syntaxhighlight>
+
+==== Inheritance ====
+
+Overriding functions inherit any <tt>scope</tt> annotations from their antecedents.
+Scope is covariant, meaning it can be added to overriding functions.
+
+<syntaxhighlight lang="D">
+class C
+{
+    int foo(ref T);
+    int bar(scope ref T);
+}
+
+class D : C
+{
+    override int foo(scope ref T); // Ok, can add scope
+    override int bar(ref T);       // Error, cannot remove scope
+}
+</syntaxhighlight>
+
+==== Mangling ====
+
+Scope will require additional mangling, as it affects the interface of the function.
+In cases where scope is ignored, it does not contribute to the mangling.
+Scope parameters will be mangled with ???.
+
+==== Nested Functions ====
+
+Nested functions have more objects available than just their arguments:
+
+<syntaxhighlight lang="D">
+ref T foo() {
+  T t;
+  ref T func() { return t; }
+  return func();  // disallowed
+}
+</syntaxhighlight>
+
+Nested functions are analyzed as if each variable accessed outside of its scope was passed as a ref parameter.
+All parameters have scope inferred from how they are used in the function body.
+
+
+=== Ref ===
+
+==== Escaping via Return ====
+
+The simple cases of this are already disallowed prior to this DIP:
+
+<syntaxhighlight lang="D">
+T* func(T t) {
+  T u;
+  return &t; // Error: escaping reference to local t
+  return &u; // Error: escaping reference to local u
+}
+</syntaxhighlight>
+
+But are easily circumvented:
+
+<syntaxhighlight lang="D">
+T* func(T t) {
+  T* p = &t;
+  return p;  // no error detected
+}
+</syntaxhighlight>
+
+@safe currently deals with this by preventing taking the address of a local:
+
+<syntaxhighlight lang="D">
+T* func(T t) @safe {
+  T* p = &t; // Error: cannot take address of parameter t in @safe function func
+  return p;
+}
+</syntaxhighlight>
+
+This is restrictive. The <tt>ref</tt> storage class was introduced which
+defines a special purpose pointer. <tt>ref</tt> can only appear in certain contexts,
+in particular function parameters and returns, only applies to declarations,
+cannot be stored, and cannot be incremented.
+
+<syntaxhighlight lang="D">
+ref T func(T t) @safe {
+  return t; // Error: escaping reference to local variable t
+}
+</syntaxhighlight>
+
+Ref can be passed down to functions:
+
+<syntaxhighlight lang="D">
+void func(ref T t) @safe;
+void bar(ref T t) @safe {
+   func(t); // ok
+}
+</syntaxhighlight>
+
+But the following idiom is far too useful to be disallowed:
+
+<syntaxhighlight lang="D">
+ref T func(ref T t) {
+  return t; // ok
+}
+</syntaxhighlight>
+
+And if it is misused it can result in stack corruption:
+
+<syntaxhighlight lang="D">
+ref T foo() {
+  T t;
+  return func(t); // currently, no error detected, despite returning pointer to t
+}
+</syntaxhighlight>
+
+The:
+
+<syntaxhighlight lang="D">
+return func(t);
+</syntaxhighlight>
+
+case is detected by all of the following conditions being true:
+
+
+* foo() returns by reference
+* func() returns by reference
+* func() has one or more parameters that are by reference
+* 1 or more of the arguments to those parameters are stack objects local to foo()
+* Those arguments can be @safe-ly converted from the parameter to the return type.
+For example, if the return type is larger than the parameter type, the return type
+cannot be a reference to the argument. If the return type is a pointer, and the
+parameter type is a size_t, it cannot be a reference to the argument. The larger
+a list of these cases can be made, the more code will pass @safe checks without requiring
+further annotation.
+
+==== <tt>scope ref</tt> ====
+
+The above solution is correct, but a bit restrictive. After all, <tt>func(t, u)</tt> could be returning
+a reference to non-local <tt>u</tt>, not local <tt>t</tt>, and so should work. To fix this, introduce the concept
+of <tt>scope ref</tt>:
+
+<syntaxhighlight lang="D">
+ref T func(scope ref T t, ref T u) {
+  return t; // Error: escaping scope ref t
+  return u; // ok
+}
+</syntaxhighlight>
+
+Scope means that the ref is guaranteed not to escape.
+
+<syntaxhighlight lang="D">
+T u;
+ref T foo() @safe {
+  T t;
+  return func(t, u); // Ok, u is not local
+  return func(u, t); // Error: escaping scope ref t
+}
+</syntaxhighlight>
+
+This minimizes the number of <tt>scope</tt> annotations required.
+
+==== Scope Function Returns ====
+
+<tt>scope</tt> can be applied to function return values (even though it is not a type qualifier).
+It must be applied to the left of the declaration, in the same way <tt>ref</tt> is:
+
+
+<syntaxhighlight lang="D">
+int* foo() scope;     // applies to 'this' reference
+scope: int* foo();    // applies to 'this' reference
+scope { int* foo(); } // applies to 'this' reference
+scope int* foo();     // applies to return value
+</syntaxhighlight>
+
+The lifetime of a scope return value is the lifetime of an rvalue. It may not be copied in a way that extends its life.
+
+<syntaxhighlight lang="D">
+int* bar(scope int*);
+scope int* foo();
+...
+return foo();         // Error, lifetime(return) > lifetime(foo())
+int* p = foo();       // Error, lifetime(p) is &infin;
+bar(foo());           // Ok, lifetime(foo()) > lifetime(bar())
+scope int* q = foo(); // error, lifetime(q) > lifetime(rvalue)
+</syntaxhighlight>
+
+This enables scope return values to be safely chained from function to function; in particular
+it also allows a ref counted struct to safely expose a reference to its wrapped type.
+
+==== Out Parameters ====
+
+<tt>out</tt> parameters are treated like <tt>ref</tt> parameters when <tt>scope</tt> is applied.
+
+=== Classes ===
+
+Scope class semantics are equivalent to a pointer to a struct.
+
+=== Static Arrays ===
+
+Scope static array semantics are equivalent to a scope struct:
+
+<syntaxhighlight lang="D">
+T[3] a;
+struct A { T t0, t1, t2; } A a;
+</syntaxhighlight>
+
+=== @safe ===
+
+Errors for scope violations are only reported in @safe code.
+
+=== Breaking Existing Code ===
+
+Some code will no longer work. Although inference will take care of a lot of cases,
+there are still some that will fail.
+
+<syntaxhighlight lang="D">
+int i,j;
+int* p = &i;  // Ok, scope is inferred for p
+int* q;
+q = &i;   // Error: too late to infer scope for q
+</syntaxhighlight>
+
+Currently, <tt>scope</tt> is ignored except that a new class use to initialize a scope variable allocates the class
+instance on the stack. Fortunately, this can work with this new proposal, with an optimization that recognizes
+that if a new class is unique, and assigned to a scope variable, then that instance can be placed on the stack.
+
+=== Major Idioms Enabled ===
+
+====Identity function====
+
+<syntaxhighlight lang=D>
+T identity(T)(T x) { return x; } // overload 1
+ref T identity(T)(ref T x) { return x; } // overload 2
+</syntaxhighlight>
+
+Even if the body of <tt>identity</tt> weren't available, the compiler can infer it is escaping its parameter. 
+
+If <tt>identity</tt> is applied to a <tt>scope</tt> variable (including <tt>scope ref</tt> parameters), then overload 2 is not a match because per the rules <tt>scope ref</tt> cannot bind to <tt>ref</tt>. Therefore, overload 1 will match. Example:
+
+<syntaxhighlight lang=D>
+void fun(int a, ref int b, scope ref int c) {
+    auto x = identity(42); // rvalue, overload 1 matches
+    auto y = identity(a); // lvalue, overload 2 matches
+    auto z = identity(c); // scope ref value, overload 1 matches
+}
+</syntaxhighlight>
+
+In fact both overloads can be integrated in a single signature:
+
+<syntaxhighlight lang=D>
+auto ref T identity(T)(auto ref T x) { return x; }
+</syntaxhighlight>
+
+====Owning Containers====
+
+Containers that own their data will be able to give access to elements by <tt>scope ref</tt>. The compiler ensures that the references returned never outlive the container. Therefore, the container can deallocate its payload (subject to control of multiple container copies, e.g. by means of reference counting). A basic outline of a reference counted slice is shown below:
+
+<syntaxhighlight lang=D>
+@safe struct RefCountedSlice(T) {
+    private T[] payload;
+    private uint* count;
+    this(size_t initialSize) {
+        payload = new T[initialSize];
+        count = new size_t;
+        *count = 1;
+    }
+    this(this) {
+        if (count) ++*count;
+    }
+    void opAssign(Container rhs) {
+        this.__dtor();
+        payload = rhs.payload;
+        count = rhs.count;
+        ++*count;
+    }
+    // Interesting fact #1: destructor can be @trusted
+    @trusted ~this()  {
+        if (count && !--*count) {
+            delete payload;
+            delete refs;
+        }
+    }
+    // Interesting fact #2: references to internals can be given away
+    scope ref T opIndex(size_t i) {
+        return payload[i];
+    }
+    ...
+}
+</syntaxhighlight>
+
+<tt>RefCountedSlice</tt> mimics the semantics of <tt>T[]</tt> with the notable difference that the payload is deallocated automatically when it is no longer used. It is usable in <tt>@safe</tt> code because the compiler ensures statically a <tt>ref</tt> to an element may never outlive the slice.
+
+=== Implementation Plan ===
+Turning this on may cause significant breakage, and may also be found to be an unworkable design. Therefore, implementation stages will be:
+
+* enable new behavior with a compiler switch <tt>-scope</tt>
+* remove <tt>-scope</tt>, issue warning when errors are detected
+* replace warnings with deprecation messages
+* replace deprecations with errors
+
+
+[[Category: DIP]]

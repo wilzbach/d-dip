@@ -1,0 +1,38 @@
+== DIP70: @api/extern(noinfer) attribute ==
+
+{| class="wikitable"
+!Title:	
+!''extern(noinfer)''
+|-
+|DIP:	
+|70
+|-
+|Version:
+|1
+|-
+|Created:
+|2015-01-17
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Zach Tollen
+|-
+|Links:
+|
+* [http://forum.dlang.org/post/vlzwhhymkjgckgyoxlrq@forum.dlang.org Main article]
+Related:
+* [http://wiki.dlang.org/DIP45 DIP45]
+* [http://forum.dlang.org/post/otejdbgnhmyvbyaxatsk@forum.dlang.org Dicebot's forthcoming DIP]
+|}
+
+== In a Nutshell ==
+
+This proposal requires that covariant attribute inference for all functions already exist. When and if that happens, introduce an attribute (suggested names: '''@api''', '''extern(noinfer)''') which tells the compiler to mangle the name and generate the .di interface with only the function's explicit attributes and not its inferred ones. This is to stabilize the linking API, and may also be useful in enforcing discipline. See the [http://forum.dlang.org/post/vlzwhhymkjgckgyoxlrq@forum.dlang.org full article].
+
+Note: This DIP was created more-or-less as a stub, to gather relevant links and to preserve the idea for future reference. This DIP may be made irrelevant by a more comprehensive system which statically *guarantees* a connection between a .di interface file and its corresponding binary object, as suggested by Dicebot(DIP forthcoming, see above link).
+
+Also relevant is [http://wiki.dlang.org/DIP45 DIP45], which addresses a different linking concern and served to inspire [http://forum.dlang.org/post/otejdbgnhmyvbyaxatsk@forum.dlang.org Dicebot's forthcoming proposal].
+
+[[Category: DIP]]

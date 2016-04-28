@@ -1,0 +1,72 @@
+{| class="wikitable"
+!Title:
+!'''DIP Template'''
+|-
+|DIP:
+|65
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2014-07-07
+|-
+|Last Modified:
+|2014-07-07
+|-
+|Author:
+|Brian Schott
+|-
+|Links:
+|
+* https://issues.dlang.org/show_bug.cgi?id=12558
+* https://issues.dlang.org/show_bug.cgi?id=10247
+* http://forum.dlang.org/post/xmqzrgysgxdmqrnfpxdq@forum.dlang.org
+|}
+
+== Abstract ==
+This DIP outlines some changes to clean up the exception catching syntax in the D language
+
+== Rationale ==
+
+According to the grammar documentation on dlang.org, the following code:
+
+<syntaxhighlight lang="D">
+catch (A)
+    .someFunction();
+</syntaxhighlight>
+
+should be parsed with the '''LastCatch''' rule, with (A).someFunction(); being treated as a function call.
+
+What actually happens, is that DMD parses this using the '''Catch''' rule, treating A as an exception type and then calling the global-scoped someFunction().
+
+This is caused by several bugs:
+# Exceptions are not required to have names by the compiler. The grammar specification requires that exceptions be given names, although the specification also states "If just type T is given and no variable v, then the catch clause is still executed.". In this regard the specification is not consistent with itself.
+# The '''Catch''' rule is assumed whenever a "(" token is hit after a "catch" token, regardless of whether it starts a '''NoScopeNonEmptyStatement''' or not.
+
+== Grammar Changes ==
+
+<ol>
+<li>The '''CatchParameter''' rule is rewritten as follows:
+<pre>
+CatchParameter:
+    BasicType Identifier?
+</pre>
+This change merely updates the documentation to be consistent with DMD's treatment of exception names.</li>
+<li>
+The '''LastCatch''' rule is removed. Users who want to keep the functionality of their code unchanged must now explicitly "catch (Throwable)". This change is necessary to prevent the grammar from becoming ambiguous.</li>
+</ol>
+
+== Code Breakage ==
+Code that used the '''LastCatch''' syntax will no longer compile.
+
+== Upgrade Path ==
+A tool that can automatically convert usage of this syntax to the more common "catch (Throwable)" syntax is located here: https://gist.github.com/Hackerpilot/5ff6d86f4d22a14a00f3
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

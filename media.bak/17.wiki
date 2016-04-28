@@ -1,0 +1,164 @@
+{| class="wikitable"
+!Title:	
+!'''Sane volatile statement'''
+|-
+|DIP:	
+|17
+|-
+|Version:
+|1
+|-
+|Status:
+|Dropped
+|-
+|Created:
+|2011-07-31
+|-
+|Last Modified:
+|2011-07-31
+|-
+|Author:
+|Alex Rønne Petersen  (alex (AT) lycus.org)
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+This document describes a refined volatile statement for the D programming language. The new definition takes into account the needs of low-level, embedded, kernel, and driver developers, etc. The idea is to define volatile in such a way that it has strict, well-defined semantics that programmers can rely on and which can easily be implemented in a D compiler.
+
+== Rationale ==
+D currently has no way to do safe memory-mapped I/O. The reason for that is that the language has no well-defined volatile statement or type qualifier. This means that a compiler is free to reorder memory operations as it sees fit and even erase some loads/stores that it thinks are dead (but which have actual impact on program semantics).
+
+While D could simply introduce a type qualifier akin to C's volatile, this was decided against for this proposal. It would allow rather nonsensical code such as:
+
+    void foo()
+    {
+        volatile int i;
+    
+        ...
+    
+        i = 42;
+    }
+
+The volatile on the declaration of i has no effect, nor could it be given any meaningful effect. Thus, volatile as a type qualifier was deemed overengineered (especially in the light of the many qualifiers D already has). Instead, in this proposal, a volatile statement is defined using the already-in-place syntax which is currently deprecated.
+
+== Description ==
+The volatile statement is very similar to the with statement, except that it takes no 'argument': It introduces a new scope in the statement (which can be a block) following it. Code within this statement is protected from a number of problems that present themselves when a compiler optimizes code that deals with things like memory-mapped I/O.
+
+== Grammar ==
+The grammar for a volatile statement shall be:
+
+    VolatileStatement:
+    volatile ScopeStatement
+
+The existing statement grammar shall be expanded as such:
+	
+    NonEmptyStatementNoCaseNoDefault:
+        ...
+        VolatileStatement
+
+This means that the following (silly) code is valid:
+
+    bool foo()
+    {
+        int* i = new int;
+    
+        volatile
+            *i = 42;
+       
+        volatile
+        {
+            *i = 1;
+            *i = 2;
+            *i = 3;
+        }
+       
+        volatile
+        {
+            *i = 42;
+            
+            volatile
+            {
+                return *i == 42;
+            }
+        }
+    }
+
+== Semantics ==
+All statements within a volatile statement are guaranteed to execute in the **exact** order that they are written in, lexically, even if it seems to the compiler that the statements could be reordered harmlessly to achieve better performance.
+
+For example, the compiler may not move **any** of the statements here:
+
+    void foo()
+    {
+        int i;
+
+        volatile
+        {
+            bar();
+            i = 42;
+            baz(i);
+        }
+    }
+Further, the compiler is not allowed to optimize out any statements, even if they seem completely dead. For instance, in this example, the compiler must not remove the first assignment even though it seems dead:
+
+    void foo()
+    {
+        int i;
+
+        volatile
+        {
+            i = 1;
+            i = 2;
+        }
+    }
+	
+Lastly, volatile statements may not be reordered with regard to each other. That is, in this example, the first volatile statement must not be moved to after the second and vice versa:
+
+    void foo()
+    {
+        volatile
+            bar();
+
+        volatile
+            baz();
+    }
+Volatile statements may, however, be reordered with respect to non-volatile statements. So, in the example below, the volatile statement may be moved to the end of the function (after the call to baz):
+
+    void foo()
+    {
+        int i;
+
+        volatile
+            bar(); // Notice that there is no dependency on i.
+
+        i = 42;
+        baz(i);
+    }
+(Assuming, of course, that reordering the non-volatile code has no visible effect on semantics.)
+
+Just to be clear, volatile guarantees **absolutely nothing** about concurrency.
+
+== Alternatives ==
+A number of alternatives to a volatile statement have been suggested. They are, however, not good enough to actually replace a volatile statement for the reasons outlined below.
+
+=== Shared qualifiers ===
+The shared type qualifier has been suggested as a solution to the problems volatile tries to solve. However:
+
+* It is not implemented in any compiler, so practically using it now is not possible at all.
+* It does not have any well-defined semantics yet.
+* It will most likely not be portable because it's designed for the x86 memory model.
+* If ever implemented, it will result in memory fences and/or atomic operations, which is **not** what volatile memory operations are about. This will severely affect pipelining and performance in general.
+
+=== Inline Assembly ===
+It was suggested to use inline assembly to perform volatile memory operations. While a correct solution, it is not reasonable:
+
+* It leads to unportable programs.
+* It leads to a dependency on the compiler's inline assembly syntax.
+* Some compilers may even decide to optimize the assembly itself.
+* Memory-mapped I/O is too common in low-level programming for a systems language to require the programmer to drop to assembly.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+[[Category: DIP]]

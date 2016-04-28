@@ -1,0 +1,210 @@
+{| class="wikitable"
+!Title:
+!'''Fix Unsafe RC Pass By Ref'''
+|-
+|DIP:
+|77
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2015-04-08
+|-
+|Last Modified:
+|{{REVISIONYEAR}}-{{REVISIONMONTH}}-{{REVISIONDAY}}
+|-
+|Author:
+|Walter Bright
+|-
+|Links:
+| [http://www.digitalmars.com/d/archives/digitalmars/D/RCArray_is_unsafe_257630.html#N257847 NG Discussion for DIP25]
+|}
+
+
+==Definitions==
+
+<dl>
+<dt>Reference Counted Object (RCO):</dt>
+
+	<dd>An object is assumed to be reference counted if it has a postblit and a destructor,
+	and does not have an opAssign marked @system.
+	</dd>
+
+<dt>Payload:</dt>
+
+	<dd>A value returned by ref by a function that has an RCO passed by 'return ref'.
+	</dd>
+</dl>
+
+==Problem==
+
+A couple of problems have been reported with D's current support for reference counting.
+
+<ol>
+
+<li>[http://www.digitalmars.com/d/archives/digitalmars/D/RCArray_is_unsafe_257630.html#N257630 Problem 1]
+
+<syntaxhighlight lang="D">
+ struct T {
+     void doSomething();
+ }
+ struct S {
+     RCArray!T array;
+ }
+ void main() {
+     auto s = S(RCArray!T([T()])); // s.array's refcount is now 1
+     foo(s, s.array[0]);           // pass by ref
+ }
+ void foo(ref S s, ref T t) {
+     s.array = RCArray!T([]);      // drop the old s.array
+     t.doSomething();              // oops, t is gone
+ }
+</syntaxhighlight>
+</li>
+
+<li>[http://www.digitalmars.com/d/archives/digitalmars/D/RCArray_is_unsafe_257630.html#N257847 Problem 2]
+
+<syntaxhighlight lang="D">
+void main()
+{
+    auto arr = RCArray!int([0]);
+    foo(arr, arr[0]);
+}
+
+void foo(ref RCArray!int arr, ref int val)
+{
+    {
+	auto copy = arr; //arr's (and copy's) reference counts are both 2
+	arr = RCArray!int([]); // There is another owner, so arr 
+			       // forgets about the old payload
+    } // Last owner of the array ('copy') gets destroyed and happily
+      // frees the payload.
+    val = 3; // Oops.
+}
+</syntaxhighlight>
+</li>
+</ol>
+
+The problem stems from a function taking a reference to a payload and a reference
+to the RCO that contains the payload, then manipulating the RCO into
+freeing the payload before the function returns (i.e. the payload reference is still
+active).
+
+
+
+==Solution Summary==
+
+Wrap the call to the function with an increment/decrement of the RCO's ref count,
+ensuring that its payload will remain valid for the duration of the function call.
+
+More accurately, given a reference counted object rc that has a payload  passed by ref to function foo():
+
+<syntaxhighlight lang="D">
+T foo(ref Payload payload);
+...
+RC rc;
+foo(rc.payload);
+</syntaxhighlight>
+
+rewrite foo(rc) as:
+
+<syntaxhighlight lang="D">
+auto tmp = rc;
+foo(rc.payload);
+</syntaxhighlight>
+
+The initialization of tmp will cause the reference count to be incremented, and will guarantee the
+lifetime of rc's payload will be longer than the call to foo().
+The lifetime of tmp will be the same as that of a temporary with a destructor.
+
+
+
+==Optimizations==
+
+The point of passing an RC object payload
+by ref is to avoid the increment and decrement, especially since the decrement will have to be wrapped
+in an exception handler. Thus, when the compiler can statically prove that the RC object will not be
+reassigned in foo(), it does not need to generate the tmp assignment.
+Whether such optimizations occur or not is implementation defined, more opportunities
+for tmp elision will present themselves as compilers improve.
+
+
+Reassignment can occur if foo() has access to a mutable reference to rc.
+
+The most obvious case where the tmp copy can be elided is for:
+
+<syntaxhighlight lang="D">
+T foo(const ref Payload payload) pure;
+</syntaxhighlight>
+
+The pure means that no other mutable references to rc can come from globals. The const insures that no mutable
+ref to rc can come from payload (a cyclical data structure).
+
+If Payload can be statically determined to not contain any mutable references to RC, then the elision can occur
+for:
+
+<syntaxhighlight lang="D">
+T foo(ref Payload payload) pure;
+</syntaxhighlight>
+
+Const references to RC do not prevent elision:
+
+<syntaxhighlight lang="D">
+T foo(const ref RC rc, ref Payload payload) pure;
+</syntaxhighlight>
+
+If RC has no transitive reference to Payload, then this does not prevent elision:
+
+<syntaxhighlight lang="D">
+T foo(ref RC rc, ref Payload payload) pure;
+</syntaxhighlight>
+
+===Nested Functions===
+
+Nested functions can have uplevel references to variables that are not parameters. These need to be accounted
+for in looking for mutable references to rc.
+
+===Tracking of Local RC Objects===
+
+Static analysis of uses of local RC objects can be used to prove that no mutable references to them can exist
+in a called function.
+
+===Inference===
+
+In functions where the source exists and attributes are inferred, the function body can also be analyzed for
+attempts to reassign rc.
+
+
+
+
+==Solutions In Other Languages==
+
+===C++===
+
+Don't write code that way.
+
+Cons: No mechanical checking for memory corruption errors.
+
+
+===Objective C===
+
+Uses allocation pools, which have the effect of keeping a reference count above 1 so
+the payload does not get prematurely deleted.
+
+Cons: A lot has been written about such pools, but they remain complex and confusing to
+use properly. Not obvious how to mechanically check that they are used correctly.
+
+===Rust===
+
+Statically prevent more than one mutable reference to an object.
+Regard access to mutable globals as unsafe.
+
+Cons: Many useful idioms are precluded, high barrier to learn how to write code that
+passes the borrow checker.
+
+
+[[Category: DIP]]

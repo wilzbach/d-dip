@@ -1,0 +1,54 @@
+{| class="wikitable"
+!Title:	
+!'''Add enum E(T) = expression; eponymous template support'''
+|-
+|DIP:	
+|42
+|-
+|Version:
+|1
+|-
+|Status:
+|Implemented
+|-
+|Load:
+|Design Details
+|-
+|Created:
+|2013-06-24
+|-
+|Last Modified:
+|2013-06-24
+|-
+|Language:
+|D2
+|-
+|Breaks:
+|Nothing (extension)
+|-
+|Links:
+|[https://github.com/D-Programming-Language/dmd/pull/2368 DMD Pull request]
+|}
+
+== Abstract ==
+
+This pattern has become quite common in D:
+
+    template isIntegral(T) {
+      enum isIntegral = is(T : long) || is(T : ulong) || ...;
+    }
+
+Analogously to struct S(T), the enum manifest constant could be written as:
+
+    enum isIntegral(T) = is(T : long) || is(T : ulong) || ...;
+
+This is a natural fit for D. It does not break any existing code, and is simple to implement - it's just a rewrite in the parser.
+
+== Rationale ==
+
+The pattern is common, and a bit awkward. It's worth supporting the new syntactic sugar.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

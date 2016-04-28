@@ -1,0 +1,88 @@
+== DIP34: Static array literals (STILL EDITING -- don't read yet) ==
+
+{| class="wikitable"
+!Title:	
+!'''Static array literals'''
+|-
+|DIP:	
+|34
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-04-06
+|-
+|Last Modified:
+|2013-04-06
+|-
+|Author:
+|Timothee Cour
+|-
+|Links:
+| [http://forum.dlang.org/post/ydyqguthbfxlnuxtqklx@forum.dlang.org] [https://github.com/Dgame/dmd/tree/static_array_literals implementation in progress]
+|
+|}
+
+== Abstract ==
+This is a proposal for introducing static array literals, as follows:
+<syntaxhighlight lang="d">
+   auto x=[1,2,3]S; 
+   static assert(is(typeof(x)==int[3]));
+</syntaxhighlight>
+The particular choice of 'S' can be discussed.
+
+== Description ==
+Currently, array literals such as 
+<syntaxhighlight lang="d">
+   auto x=[1,2,3];
+</syntaxhighlight>
+make x dynamic. To get a static array one needs to write: 
+<syntaxhighlight lang="d">
+   int[3] x=[1,2,3];
+</syntaxhighlight>
+which is inconvenient for many reasons:
+ * it's not DRY (need to explicitly write 3 as the length and specify the type int)
+ * there's no easy way to pass a static array literal to a function accepting a static array; for example it requires:
+<syntaxhighlight lang="d">
+   int[3] x=[1,2,3]; 
+   fun(x);
+</syntaxhighlight>
+
+Instead we propose the syntax:
+<syntaxhighlight lang="d">
+   auto x=[1,2,3]S; 
+</syntaxhighlight>
+where S stands for static. More generally the compiler should translate
+<syntaxhighlight lang="d">
+ [x1,...,xn]S to: typeof(x1)[n]
+</syntaxhighlight>
+
+Advantages:
+ * static array literals becomes as convenient as dynamic ones
+ * no confusion possible for the compiler; I believe this syntax doesn't clash with existing syntax.
+ * In our previous example, no need to write an intermediate x: we can just write 
+<syntaxhighlight lang="d">
+   fun([1,2,3]S);
+   fun([1.0,2,3]S); //for example, if static array of doubles requested 
+</syntaxhighlight>
+
+* this would also prevent the common workaround hacks of the form:
+<syntaxhighlight lang="d">
+   void fun(T...)(T x){} which accept fun(1,2,3): one could just write:
+   void fun(T,uint N)(in T[N]x){} or void fun(T,uint N)(T[N]x){}
+</syntaxhighlight>
+
+* this could prevent inefficient intermediate code as reported in Issue 2356 and related, as it would be clear from "S" that a static is requested. 
+
+* this could be used in expressions as well: auto x=[1,2,3]S+[4,5,6]S;
+
+This should be simpler than a previous request I've seen for int[$]x=[1,2,3]; which still requires one to write the type explicitly.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

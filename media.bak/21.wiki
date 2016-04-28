@@ -1,0 +1,85 @@
+== DIP21: Fixing @property ==
+{| class="wikitable"
+!Title:	
+!'''DIP Template'''
+|-
+|DIP:	
+|21
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2012-11-19
+|-
+|Last Modified:
+|2012-11-19
+|-
+|Author:
+|Adam D. Ruppe
+|-
+|Links:
+|
+|}
+
+== Abstract ==
+If we make {{code|@property}} rewrite to a call, while leaving the rest the same, we fix problems without creating new ones.
+
+== Rationale ==
+We want to keep existing code working as much as possible. Some code uses the same function with and without parenthesis, especially with UFCS. This is currently allowed, but can cause ambiguity with functions returning a callable or a reference. Additionally, UFCS blur the difference between setter and getter that implicit when using {{code|@property}} as show below :
+
+See some example below that are confusing ATM :
+# {{code|[1, 2].front}} is now equivalent to {{code|front {{=}} [1, 2]}}
+# {{code|void function() foo() {{(}} ... {{)}}}} it is now unclear what {{code|foo()}} does.
+# {{code|@property void function() foo() {{(}} ... {{)}}}} it is now unclear what {{code|foo()}} does.
+# {{code|ref int foo()}} it is now unclear what {{code|&foo}} does.
+# {{code|@property ref int foo()}} it is now unclear what {{code|&foo}} does.
+
+== Description ==
+There's a fairly easy way to do this, thanks to the {{code|@property}} word:
+# Any function without {{code|@property}} remains exactly the same as it is now. Parens are *not* required on them.
+# Any function with {{code|@property}} is rewritten into a call immediately. Therefore, putting () is naturally an error or delegate call because of the return value.
+
+*{{code|@property int foo() {{()}}}}
+**{{code|foo;}} rewritten into {{code|foo()}} transparently
+**{{code|foo();}} since {{code|foo}} is already {{code|foo()}}, this becomes {{code|foo()()}} - an error because you cannot call an int like a function
+
+The only potential for code breakage here is on stuff marked {{code|@property}}, which if you have been marking it on semantic properties already (NOT on places where you just wanted appease the -property switch's idiotic rules), should be fine.
+
+If in doubt, leave {{code|@property}} off. That leaves things exactly as they are.
+
+== Talk ==
+On Tuesday, 20 November 2012 at 12:44:44 UTC, Jacob Carlborg wrote:
+: Should this be allowed for functions that isn't marked with @property: foo = 3;
+
+Yes. We should *only* be changing the way @property is implemented. (Namely, actually implementing it!)
+
+Don't want to break existing code. The new changes must be opt in.
+
+
+If there's both an @property setter and a regular function, the property should be used here.
+
+
+Generally, overloading on @property could be allowed.
+
+
+If there isn't a setter, you don't change things.
+
+If setter is present: foo = foo + 1; // becomes: foo(foo() + 1);
+
+If setter is not present: foo = foo + 1; // becomes: foo() = foo() + 1;
+
+If foo returns an rvalue, this is a natural error. If it returnsref, it works fine.
+
+:I'm not sure how it fit in the DIP but &funName is ambiguous when funName return a reference.
+
+We can just define this away: &funName if it isn't a @property is the address of the function.
+
+If it is a @property, ALL operations work on the return value, so it is rewritten as &(funName()).
+
+== Copyright ==
+This document has been placed in the Public Domain.
+[[Category: DIP]]

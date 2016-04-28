@@ -1,0 +1,137 @@
+{| class="wikitable"
+!Title:	
+!'''Const code bloat'''
+|-
+|DIP:	
+|2
+|-
+|Version:
+|2
+|-
+|Status:
+|Approved
+|-
+|Load:
+|Design Details
+|-
+|Created:
+|2009-07-09
+|-
+|Last Modified:
+|2010-06-11
+|-
+|Language:
+|D2
+|-
+|Breaks:
+|Nothing (extension)
+|-
+|Links:
+|[[DIP2/Archive]] — [http://www.digitalmars.com/webnews/newsgroups.php?art_group=digitalmars.D&article_id=103609 NG Discussion] — [http://prowiki.org/wiki4d/wiki.cgi?LanguageDevel/DIPs/DIP2 Original Prowiki Page]
+|}
+
+<div style="padding: 1ex 1ex; background: #ffd;">Note: This page should be reviewed and updated to reflect the actual syntax and use of 'auto ref'. This page has already been archived and the version increased.</div>
+
+== Abstract ==
+Enhancement to const design. This is a fix for [http://d.puremagic.com/issues/show_bug.cgi?id=1961 bug 1961].
+
+== Rationale ==
+Because of the current design of the const system, writing const-correct code results in massive code duplication: each function returning a part of its argument should be implemented for mutable, const and immutable arguments. Templating is not always a solution because template functions are not virtual.
+
+In addition, it is currently impossible to safely mark a function as not modifying its parameters, yet returning those parameters with the same const contract that the caller has with the parameter.
+
+== Description ==
+<syntaxhighlight lang="d">
+class Book
+{
+    private Author xAuthor;
+    Author author()
+    {
+        return xAuthor;
+    }
+}
+</syntaxhighlight>
+
+If function author is declared mutable, it can be called only on mutable instance of Book. If it's declared const then it can return only const Author, and this is not right return type for mutable and immutable instances of Book. The solution is to define three versions of the function:
+
+<syntaxhighlight lang="d">
+class Book
+{
+    private Author xAuthor;
+    Author author()
+    {
+        return xAuthor;
+    }
+    const(Author) author() const
+    {
+        return xAuthor;
+    }
+    immutable(Author) author() immutable
+    {
+        return xAuthor;
+    }
+}
+</syntaxhighlight>
+
+Now everything works fine but at the cost of code duplication. In addition, there is no way to mark the mutable version as not modifying the Book instance ''during function execution'' without enforcing the const contract onto the caller when it reads the author. For example, a caller may want to get the author without having the accessor modify the author (guaranteed by the compiler), and then modify the author through the return value. This works fine with a field but not with a function/property.
+
+The enhancement involves introduction of new keyword for the fourth const flavor. I'll use vconst for it.
+
+<syntaxhighlight lang="d">
+class Book
+{
+    private Author xAuthor;
+    vconst(Author) author() vconst
+    {
+        return xAuthor;
+    }
+}
+</syntaxhighlight>
+
+# It works just like const function in the sense that vconst data is readonly with the difference that constness of return type is that of passed arguments: mutable, const, immutable or vconst. This allows for vconst functions in interfaces.
+# If function has two vconst parameters, best match is chosen: if arguments are of the same constness, their constness is chosen, otherwise vconst is deemed as const.
+# In overload resolution definite constness is preferred over vconst. This allows to use variant of function with immutable optimization if you want it that badly. Though copying function is not necessary: this can be settled with a pragma or compiler switch, so that compiler will generate immutable variant for the function automatically.
+# vconst is a subtype of const. When checking function body vconst is orthogonal to mutable and immutable (use vconst in function body for proper typechecking). Different case is when vconst function is called and compiler decides what constness should be imitated by vconst: it works more like template here rather than normal type modifier, it's illegal to cast immutable to vconst implicitly since vconst can mimic mutable, which depends on client code.
+# There's only one instance of the function and only one entry for it in the vtable.
+# Code generated for the function is identical to that of const function. The difference is semantical only and exists only in typesystem.
+
+== Usage ==
+<syntaxhighlight lang="d">
+class Number
+{
+    int opCmp(in Number num2) const //no need for vconst
+    {
+            //some code
+    }
+}
+
+//this function returns mutable value for mutable arguments, immutable value for immutable arguments and so on.
+vconst(Number) min(vconst Number num1, vconst Number num2)
+{
+    const tnum=num1; //castable to const but this may be not what you want
+    vconst tnum2=num2; //preserve constness, tnum2 can be returned by the function
+    return num1<num2 ? num1 : num2;
+}
+</syntaxhighlight>
+
+== Migration Notes ==
+There is a class of functions that will benefit from migrating to vconst like the min function in the [[DIP2#Usage]] section, but if these functions are not migrated, they may be not callable from the migrated ones:
+
+<syntaxhighlight lang="d">
+const(Number) min(const Number num1, const Number num2)
+{
+    return num1<num2 ? num1 : num2;
+}
+
+vconst(Number) min3(vconst Number num1, vconst Number num2, vconst Number num3)
+{
+    return min(min(num1,num2),num3);
+}
+</syntaxhighlight>
+
+Although calling <code>min(min(num1,num2),num3)</code> is ok, you won't be able to return the result.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

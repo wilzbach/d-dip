@@ -1,0 +1,179 @@
+{| class="wikitable"
+!Title:	
+!'''Operator Overloading, Reloaded'''
+|-
+|DIP:	
+|7
+|-
+|Version:
+|2
+|-
+|Status:
+|'''Approved'''
+|-
+|Created:
+|2009-10-10
+|-
+|Last Modified:
+|2009-10-14
+|-
+|Language:
+|D2
+|-
+|Breaks:
+|All existing uses of operator overloading
+|-
+|Links:
+|[[DIP7/Archive]] — [http://prowiki.org/wiki4d/wiki.cgi?LanguageDevel/DIPs/DIP7 Original Prowiki Page]
+|-
+|Related Issue:
+|[http://d.puremagic.com/issues/show_bug.cgi?id=124 Bugzilla: 124]
+|}
+
+<div style="padding: 1ex 1ex; background: #ffd;">Note: While a major change to operator overloading has be scheduled for D2.x, this page '''does not''' describe the current plan for implementation. More information can be found in [http://www.digitalmars.com/webnews/newsgroups.php?art_group=digitalmars.D&article_id=101582 Short list with things to finish for D2].</div>
+
+== Abstract ==
+This is a complete redesign of operator overloading. Currently a work-in-progress.
+
+== Rationale ==
+The operator overloading in D1.0 is largely the same as in C++, with some minor improvements. The most radical change is arguably also the most convincing: the relational operators >,<,>=,<= are replaced with a single opCmp() function. This has two major benefits: firstly, it shrinks the code required for implementation by a factor of four; and secondly, it ensures that the relational operators behave consistently with one another. This proposal recommends that we extend this successful design to the other operators, particularly the arithmetic ones. It hopes to address obvious weaknesses of the D1.0 operator overloading:
+
+== Existing weaknesses ==
+# Currently there's no provision for "expr1[expr2] @= expr3", where @ is some binary operator. The opIndexAssign is more like the token presence that makes the absence felt even more. Scaling to opIndexAddAssign etc. seems to be overkill. (Note: using ref returns doesn't work, because we lose access to the container).
+# Operators @= are dubious for classes because a class can't define "a @= b" to mean the same as "a = a @ b". I'd venture to think that many arithmetic operators don't make much sense for classes to start with.
+# There are types for which ++ or -- make sense but addition does not (e.g. STL-style iterators).
+# opXxx_r and opXxx can easily be ambiguous. (Eg, if both are templates, X.op@(X) is always ambiguous with X.op@_r(X) ).
+# Defining operators asks for code duplication. Usually people want to define all arithmetic operators to forward to some member. That is unnecessarily verbose (see e.g. the implementation of std.variant which makes heroic efforts to counter that).
+# Fortran beats operator overloading on linear algebra performance. It shouldn't.
+# It isn't possible to define an object with syntactically-pleasant multi-dimensional slicing support. (This requires $ support, as well). (E.g. row0 = array[0,0..$]; or sub_array = matrix[3..5,6..$]; )
+# The syntax for postfix ++ and -- is a hack. (It was a hack in C++, too).
+# The limitation of a single opCast operator is unintuitive, and very restrictive.
+# There is no way to overload the NCEG operators.
+# @= operators always contain boilerplate code for the return value.
+# (Special case of 2). b=a; a~=c; for strings sometimes modifies b, sometimes not.
+
+These list is broadly in agreement with the C++ FAQ-Lite:  http://www.parashift.com/c++-faq-lite/operator-overloading.html#faq-13.9
+
+== Use cases for operator overloading ==
+Ideally, the following cases should be easy and efficient to implement:
+
+* floating-point (real, imaginary, complex, decimal), fixed-point, interval, rational
+* bigint, biguint, bigfloat
+* vector, tensor, matrix, quaternion
+* Wrapper classes which simply forward the operation to a member (which is a built-in type, or one of the above types).
+
+For example, integers of limited range.
+
+The desire to accomodate other applications should not compromise the ease and efficiency of the above use cases.
+
+== Performance Issues ==
+Expressions almost always involve the creation of temporary variables with short lifetimes. The number of temporaries should be minimized. It would be ideal if a memory pool could be used for temporaries.
+
+== Use case # 1: Wrapper classes, Complex, Quaternion, etc ==
+Expression optimisation is crucial. Efficiency primarily depends on compiler's inlining ability. C++ compilers have got very good at this. Thus, the primary challenge is to keep the implementation code short.
+
+== Use case # 2: BigInt, BigFloat, etc ==
+Time is dominated by two things: non-linear operations (*, /, etc), and memory allocation. Expression optimisation is unimportant, except for efficient handling of temporaries.
+
+== Use case # 3: Linear algebra (a): short vectors ==
+Short vectors (length<=4) need to be handled specially. Loops must be unrolled. Temporaries are not very important.
+
+== Use case # 4: Linear algebra (b): general case ==
+This is the most difficult use case, and also the most important. Creation of temporaries needs to be minimized. Cache blocking should occur, based on total variable size. Operations should be reduced to BLAS calls. Possibly farmed off to other cores or to a GPU. (I do not think it is advisable to use compiled-on-the-fly D code for matrix operations). Whole-expression optimisation is desirable, especially in the BLAS1 case, since we should do cache blocking on the total variable size. It's less critical in the BLAS3 case, where it is more important to be efficient in handling each individual step. In addition to these issues, multi-dimensional indexing and slicing should also be possible. 
+
+For a concrete example of the BLAS1 case, a linear combination of vectors <code>v1[] += c1*v2[] - (c2+c3)*v3[] + ...</code> should have blocking applied, and ultimately translate into something like:
+
+<syntaxhighlight lang="d">
+size_t totsize = v1.sizeof + v2.sizeof + v3.sizeof; 
+size_t leftover = v1.length; 
+size_t chunksize = CACHESIZE/totsize; 
+
+for (k = 0; k < v1.length-chunksize; k+=chunksize)
+{
+    leftover -= chunksize;
+    daxpy(v1[k..k+chunksize], c1, v2[k..k+chunksize]);
+    daxpy(v1[k..k+chunksize], -(c2+c3), v3[k..k+chunksize]);
+}
+
+daxpy(v1[$-leftover..$], c1, v2[$-leftover..$]); // v1 += c1*v2 
+daxpy(v1[$-leftover..$], -(c2+c3), v3[$-leftover..$]); // v1 -= c2*v3 
+</syntaxhighlight>
+
+== Use case # 5: Expression Templates ==
+
+One consequence of opCmp() is that expression templates involving relational operators becomes impossible, because the return type of opCmp is always 'int'. Extending this technique to other operators is likely to further reduce the opportunity for expression templates in D. It may be necessary to provide an alternative.
+
+== Potential for Abuse ==
+
+In the first C++ implementation, a design goal was to keep the implementation of operator overloading as simple as possible; Bjarne Stroustrup notes that the initial implementation in C++ was achieved with only 18 lines of code! Interestingly his first paper on operator overloading noted the potential for abuse: "For example, it is quite possible to define = to mean plus and + to mean assignment. The only protection provided against idiotic use is the guarantee that the base language is immutable" - B. Stroustup, "Operator Overloading in C++", (date unknown, but mentions that there are now more than 100 installations of C++!). 
+
+From Java: "I left out operator overloading as a fairly personal choice because I had seen too many people abuse it in C++....Then there's a community of about 10 percent that have actually used operator overloading appropriately and who really care about it, and for whom it's actually really important; this is almost exclusively people who do numerical work, where the notation is very important to appealing to people's intuition, because they come into it with an intuition about what the + means, and the ability to say "a + b" where a and b are complex numbers or matrices or something really does make sense." - James Gosling,  http://www.gotw.ca/publications/c_family_interview.htm.
+
+== Background/ Previous proposals ==
+We now consider how many of the items on this wishlist can be achieved simultaneously.
+
+A previous proposal(Bugzilla 124) showed that by defining A -= B to be interchangable with A=A-B, and introducing opXXXAssign_r for the related reverse operation A = B - A, it is possible to eliminate unnecessary temporaries. The primary beneficiary of this would be the BIGINT-style use case.
+
+However, this could only be applied to structs. A drastic possibility for doing this would be to disallow @= for classes. (Should arithmetic overloads be legal AT ALL for classes?) 
+
+This would immediately solve points 2 and 7. By adding the opAssignXXX_r from the Bugzilla 124 proposal, the creation of unnecessary temporaries is also solved. (Though not for the BLAS1 use case, however). The key inefficiencies in the existing scheme are (1) that opMulAddAssign() does not exist; and (2) the total expression size is unknown.
+
+== Proposal, part 1: Enforce relationship between operators ==
+In D, opCmp() enforces the relationships between the relational operators. There are several others which could be enforced. 
+
+For some type T with overloaded operators, when x and y are instances of T, and a is an int or floating point value, the following transformations could be made legal whenever the relevant operators are overloaded (@ can be any binary operator):
+
+{|
+|  x         || <-->  || x = x || (currently *never* true for reference types!)
+|-
+| -(-x)     || <-->  || x   
+|-
+| -(a * x)  || <-->  || (-a) * x
+|-
+| a*x       || <-->  || x*a
+|-
+| 1*x       || <-->  || x
+|-
+| -1*x      || <-->  || -x
+|-
+| -x * -y   || <-->  || x*y
+|-
+| x++       || <-->  || ++x || illegal to use the return value of x++ except for built-in types (check that return type is void).
+|-
+| x         ||       ||     || always returns x.
+|}
+
+All of the above transformations are correct for int, floating-point (real, imaginary, complex), bigint, bigfloat, vector, tensor, matrix, quaternion, and pure mathematics. 
+
+Logical operations (less important, and doubtful: some freedom in these may be reasonable. eg, it might be OK to allow ^ for exponentiation, which would then cease to be commutative; we might prefer to make ^^ or ** available instead). If we force arithmetic behavior of operators, there must be separate operator for exponentiation to prevent misunderstanding and operator abuse.
+
+{|
+| x & y || <--> || y & x
+|-
+| x | y || <--> || y | x
+|-
+| x ^ y || <--> || y ^ x
+|-
+| ~(~x) || <--> || x
+|}
+
+Commutativity of '+' is also true in the cases I've listed, but gets violated by those silly languages that use '+' for string concatenation. So that would be controversial.
+
+{|
+| x + y || <--> || y + x
+|}
+
+The current transformation in D:
+
+{|
+| x++ || --> || x + 1
+|}
+
+should be made illegal; it is not true in general (+ is not always defined).
+
+I think programmers are entitled to assume that the above relationships hold. It's really an abuse to make them do anything else. I'd love to make them law. There would be considerable benefits for simplicity and performance, as well as comprehensibility.
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

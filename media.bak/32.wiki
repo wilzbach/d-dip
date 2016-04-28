@@ -1,0 +1,572 @@
+== DIP32: Uniform tuple syntax ==
+
+{| class="wikitable"
+!Title:	
+!'''Uniform tuple syntax'''
+|-
+|DIP:
+|32
+|-
+|Version:
+|1
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2013-03-29
+|-
+|Last Modified:
+|2013-03-29
+|-
+|Author:
+|Hara Kenji
+|-
+|Links:
+| http://forum.dlang.org/post/kj44fs$2iil$1@digitalmars.com (forum discussion)
+|}
+
+== Abstract ==
+
+This is a proposal for consistent tuple syntax and features.
+
+== Generic type/expression tuple syntax ==
+
+Use braces and commas.
+Inside tuple literal, <code>;</code> never appears. So it will not be confused with lambdas and ScopeStatements.
+
+<syntaxhighlight lang="d">
+auto tup = {10, "hi", 3.14};
+assert(tup[0] == 10);   // indexing access
+
+// In initializers
+auto fp = {;};  // lambda
+auto dg = {x;}; // lambda
+auto tup = {};  // zero-element tuple (Syntax meaning will be changed!)
+Struct s = {};  // StructInitializer
+
+// In function arguments
+foo({;});       // lambda
+foo({});        // zero-element tuple (Syntax meaning will be changed!)
+foo({1});       // one-element tuple
+foo({1, "hi"}); // two-element tuple
+
+// In statements
+void test() {
+    {1, "hi"}   // two-element tuple
+    {1}         // one-element tuple
+    {}          // ScopeStatement with no statements, not zero-element tuple.
+    // {} = tup;  // no-side effect assignment.
+    // {} = tup;  // meaningless unpacking & declaration.
+    // if (true) {} func;
+                  // ScopeStatement and parenthesis-less func call.
+}
+
+// declare tuple value by using explicit tuple type
+{int, string} tup = {1, "hi"};
+assert(tup[0] == 1);
+assert(tup[1] == "hi");
+static assert(is(typeof(tup) == {int, string}));    // tuple type
+
+alias TL = {int, string[], double[string]};  // types
+alias Fields = {int, "num", int[string], "map"};  // mixing
+alias date = {2013, 3, 29};  // values
+
+foreach (Float; {float, double, real}) { ... }
+</syntaxhighlight>
+
+<!--
+{int, int, int} d = date;  // works, but...
+void getDate({int y, int m, int d}) { ... }
+getDate( date );  // doesn't work...?
+getDate({date});  // works.
+-->
+
+== Tuple unpacking and pattern matching ==
+
+Tuple value unpacking will become handy with help of language syntax.
+Also, pattern matching syntax will be allowed in some places.
+
+=== Various places that you can use unpacking ===
+
+<ul>
+<li style="margin-bottom: 1em;">
+Variable declaration
+<syntaxhighlight lang="d">
+auto {x, y} = {1, "hi"};
+{auto x, y} = {1, "hi"};
+{int x, string y} = {1, "hi"};
+assert(x == 1 && y == "hi");
+</syntaxhighlight>
+
+<li style="margin-bottom: 1em;">
+Left side of assignment expression:
+<syntaxhighlight lang="d">
+auto tup = {1, "hi"};
+int a, string b;
+{a, b} = tup;   // Rewritten as: a = tup[0], b = tup[1];
+{c, $} = tup;   // Rewritten as: c = tup[0];
+</syntaxhighlight>
+
+<strong>Note:</strong> Cannot swap values by tuple assignment.
+<syntaxhighlight lang="d">
+int x = 1, y = 2;
+{x, y} = {y, x};
+// Lowered to:
+// x = y, y = x;
+assert(y == 2);
+assert(x == 2);
+</syntaxhighlight>
+
+<li style="margin-bottom: 1em;">
+Foreach iteratee
+<syntaxhighlight lang="d">
+foreach ({x, y}; zip([1,2,3], ["a","b","c"])) {}
+foreach (i, const {x, y}; [{1,2}, {3,4}, {5,6}, ...]) {
+    // i == 0, 1, 2, ...
+    // {x,y} == {1,2}, {3,4}, {5,6}, ...
+}
+</syntaxhighlight>
+
+Index of array, key of associative array should not be
+included in the pattern. So
+<syntaxhighlight lang="d">
+foreach ({i, e}; arr) {}  // only allowed when arr[n] is two-element tuple
+foreach ( i, e ; arr) {}  // i captures implicitly given indices
+</syntaxhighlight>
+This is necessary behavior for backward compatibility and disambiguation.
+
+And, this syntax (currently it is not enough documented)
+<syntaxhighlight lang="d">
+foreach (x, y; zip([1,2,3], ["a","b","c"])) {}
+</syntaxhighlight>
+should be deprecated.
+
+If iterated range has ref front, pattern can have ref annotation.
+<syntaxhighlight lang="d">
+auto nums = [100, 200, 300];
+auto strs = ["a", "b", "c"];
+foreach (ref {x, y}; zip(nums, arr)) {
+    x /= 10;
+    y = x.to!string;
+}
+assert(nums == [ 10 ,  20 ,  30 ]);
+assert(strs == ["10", "20", "30"]);
+</syntaxhighlight>
+
+<li style="margin-bottom: 1em;">
+Function parameters:
+<syntaxhighlight lang="d">
+void foo({int x, long y});
+void foo({int, string name}, string msg);
+// The first element of the tuple is 'unnamed'.
+
+// with lambdas:
+({A a, B b}) => a + b;
+({a, b}) => a + b;
+{a, b} => a + b;
+</syntaxhighlight>
+
+</ul>
+
+=== Various places that you can use unpacking and pattern matching ===
+
+<ul>
+<li style="margin-bottom: 1em;">
+<code>if</code> statement with pattern matching
+<syntaxhighlight lang="d">
+if (auto {1, y} = tup) {
+    // If the first element of tup (tup[0]) is equal to 1,
+    // y captures the second element of tup (tup[1]).
+}
+</syntaxhighlight>
+
+<li style="margin-bottom: 1em;">
+<code>case</code> values
+<syntaxhighlight lang="d">
+switch (tup) {
+    case {1, 2}:
+    case {$, 2}:
+    case {1, x}:    // capture tup[1] into 'x' when tup[0] == 1
+    default:        // same as {...}
+}
+</syntaxhighlight>
+The cases with patterns will be evaluated in lexical order.
+
+</ul>
+
+=== Difference between unpacking and pattern matching ===
+
+Pattern matching is only allowed in <code>if</code> and <code>case</code> statements.
+<syntaxhighlight lang="d">
+auto coord = {1, 2};
+if (auto {1, y} = coord) {}         // if statement, ok
+switch(coord) { case {1, y}: ...; } // case statement, ok
+auto {1, y} = coord;                // variable declaration, ng!
+</syntaxhighlight>
+Because the two have conditional statements which is evaluated iff the pattern matches to the operand.
+Therefore <code>$identifier</code> is only allowed for the pattern match.
+
+<dl>
+<dt><code>...</code> meaning for unpacking
+<dd>
+<code>...</code> is used for the special unpacking placeholder. It matches zero or more elements.
+<syntaxhighlight lang="d">
+auto tup = {1, "hi", 3.14, [1,2,3]};
+if (auto {1, "hi", ...} = tup) {}
+</syntaxhighlight>
+
+<dt><code>$</code> meaning for unpacking
+<dd>
+'''Comment: Martin Nowak''' I'd suggest to use <code>_</code> as a general placeholder for unused variables (see [https://issues.dlang.org/show_bug.cgi?id=13522 Issue 13522]).
+There is precedence of using <code>_</code> in other languages (python, haskell, scala) and it's useful outside of tuple unpacking.
+
+<code>$</code> is used for the special unpacking placeholder for one element but not used. It does not conflict with curent <code>array.length</code> usage, because:
+
+<ol>
+<li>all pattern matching is always appeared in statements.
+<li>To use statements in array indices, function literal is necessary. But:
+<syntaxhighlight lang="d">
+int[] a = [1,2,3];
+auto x = a[(){ return $-1; }()];
+// Error: cannnot use $ inside a function literal
+</syntaxhighlight>
+</ol>
+
+Therefore,
+<syntaxhighlight lang="d">
+auto x = a[(){
+    if (auto {1, $} = tup) {    // '$' is always *pattern placeholder*
+        ...
+    }
+    return 0;
+}];
+</syntaxhighlight>
+
+<dt><code>$identifier</code> meaning for pattern matching
+<dd>
+$identifier is used for the special syntax for pattern matching.
+Inside pattern, bare <code>identifier</code> will always make placeholder.
+<syntaxhighlight lang="d">
+if (auto {x, y} = coord) {
+    // x and y captures coord's elements only in 'then' statement.
+}
+</syntaxhighlight>
+
+If newly declared valiable conflicts with outer variables, it is refused.
+<syntaxhighlight lang="d">
+int x = 1;
+if (auto {x, y} = coord) { auto x2 = x; }  // error, ambiguous 'x' usage
+</syntaxhighlight>
+
+If you want to make a pattern with evaluating variable, use <code>$identifier</code>.
+<syntaxhighlight lang="d">
+int x = 1;
+if (auto {$x, y} = coord) { ... }
+// If the first element of coord is equal to 1 (== x), 'then' statement wil be evaluated.
+</syntaxhighlight>
+
+</dl>
+
+=== Unpacking and tuple expansion ===
+
+Unpacking implicitly requires tuple for its operand, so it can be automatically expanded.
+<syntaxhighlight lang="d">
+auto coord = {1, 2};
+if (auto {x, y} = coord) {}
+if (auto {x, y} = coord[]) {}   // same, explicitly expands fields
+</syntaxhighlight>
+
+=== Mismatching tuple element types and length ===
+
+<syntaxhighlight lang="d">
+auto tup = {1, "hi"}
+if (auto {num} = tup) {}                // compile error
+if (auto {num, msg, x} = tup) {}        // compile error
+if ({string num, int msg} = tup) {}     // compile error
+
+if (auto {num, msg, ...} = tup) {}      // ok, `...` matches to zero-elements.
+</syntaxhighlight>
+
+<!--
+== TODO ==
+
+The things written in this section are not yet well defined, so they might be removed later.
+
+=== Tuple fields are always unnamed ===
+
+<syntaxhighlight lang="d">
+// The types of tuples which have field names
+alias MyPair = typeof({1, "hi"});
+alias MyRecord = typeof({count:1, msg:"hi"});
+static assert(is(MyPair == MyRecord));  // true or false?
+static assert(is(MyPair  : MyRecord));  // true or false?
+static assert(is(MyRecord  : MyPair));  // true or false?
+alias MyStudent = typeof({num:1, name:"John"});
+static assert(is(MyRecord == MyStudent));  // true or false?
+
+// named pattern is mostly useless
+if (auto {num:1, msg:"hi"} = pair) {}
+</syntaxhighlight>
+
+=== Unpacking fields from object ===
+
+<syntaxhighlight lang="d">
+auto tup = {obj.a, obj.b, obj.c}
+is shorten to:
+auto tup = obj.{a, b, c}
+
+auto tup = {obj.a, obj.b.x, obj.b.y, obj.c}
+is shorten to:
+auto tup = obj.{a, b.{x, y}[], c}
+</syntaxhighlight>
+
+* With `obj.{...}`, can guarantee that `obj` will be evaluated once.
+* The result of `obj.{...}` always makes a tuple.
+  It is essential limitation that comes from the syntax .
+-->
+
+== Use case of uniform tuple syntax ==
+
+Original D code:
+Source: http://forum.dlang.org/post/gridjorxqlpoytuxwpsg@forum.dlang.org
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.typecons, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!(s => tuple(s[1], [tuple(s[0], "")]))
+                .array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto lo = heap.front; heap.removeFront;
+        auto hi = heap.front; heap.removeFront;
+        foreach (ref pair; lo[1]) pair[1] = '0' ~ pair[1];
+        foreach (ref pair; hi[1]) pair[1] = '1' ~ pair[1];
+        heap.insert(tuple(lo[0] + hi[0], lo[1] ~ hi[1]));
+    }
+    return heap.front[1].schwartzSort!q{tuple(a[1].length, a[0])};
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach (p; s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", p[]);
+}
+</syntaxhighlight>
+
+
+This proposal:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!({c, f} => {f, [{c, ""}]}).array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto {lof, loa} = heap.front;   heap.removeFront;
+        auto {hif, hia} = heap.front;   heap.removeFront;
+
+        foreach ({$, ref e}; loa) e = '0' ~ e;
+        foreach ({$, ref e}; hia) e = '1' ~ e;
+        heap.insert({lof + hif, loa ~ hia});
+    }
+
+    return heap.front[1].schwartzSort!({c, e} => {e.length, c});
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach ({c, e}; s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+
+Basic () syntax, perhaps the cleanest, but can't be used:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!((c, f) => (f, [(c, "")])).array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto (lof, loa) = heap.front;  heap.removeFront;
+        auto (hif, hia) = heap.front;  heap.removeFront;
+        foreach ((_, ref e); loa) e = '0' ~ e;
+        foreach ((_, ref e); hia) e = '1' ~ e;
+        heap.insert((lof + hif, loa ~ hia));
+    }
+    return heap.front[1].schwartzSort!((c, e) => (e.length, c));
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach ((c, e); s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+
+tuple() syntax, clear, a bit long:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!(tuple(c, f) => tuple(f, [tuple(c, "")]))
+                .array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto tuple(lof, loa) = heap.front;  heap.removeFront;
+        auto tuple(hif, hia) = heap.front;  heap.removeFront;
+        foreach (tuple(_, ref e); loa) e = '0' ~ e;
+        foreach (tuple(_, ref e); hia) e = '1' ~ e;
+        heap.insert(tuple(lof + hif, loa ~ hia));
+    }
+    return heap.front[1].schwartzSort!(tuple(c, e) => tuple(e.length, c));
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach (tuple(c, e); s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+
+@{} syntax, noisy:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!(@{c, f} => {f, [@{c, ""}]}).array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto @{lof, loa} = heap.front;  heap.removeFront;
+        auto @{hif, hia} = heap.front;  heap.removeFront;
+        foreach (@{_, ref e}; loa) e = '0' ~ e;
+        foreach (@{_, ref e}; hia) e = '1' ~ e;
+        heap.insert(@{lof + hif, loa ~ hia});
+    }
+    return heap.front[1].schwartzSort!(@{c, e} => @{e.length, c});
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach (@{c, e}; s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+
+
+(||) banana syntax, a bit confusing, but IDEs can visualize (| and |) as some nice Unicode glyps:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!((|c, f|) => (|f, [(|c, ""|)]|)).array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto (|lof, loa|) = heap.front;  heap.removeFront;
+        auto (|hif, hia|) = heap.front;  heap.removeFront;
+        foreach ((|_, ref e|); loa) e = '0' ~ e;
+        foreach ((|_, ref e|); hia) e = '1' ~ e;
+        heap.insert((|lof + hif, loa ~ hia|));
+    }
+    return heap.front[1].schwartzSort!((|c, e|) => (|e.length, c|));
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach ((|c, e|); s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+Something like:
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!(⦅c, f⦆ => ⦅f, [⦅c, ""⦆]⦆).array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto ⦅lof, loa⦆ = heap.front;  heap.removeFront;
+        auto ⦅hif, hia⦆ = heap.front;  heap.removeFront;
+        foreach (⦅_, ref e⦆; loa) e = '0' ~ e;
+        foreach (⦅_, ref e⦆; hia) e = '1' ~ e;
+        heap.insert(⦅lof + hif, loa ~ hia⦆);
+    }
+    return heap.front[1].schwartzSort!(⦅c, e⦆ => ⦅e.length, c⦆);
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach (⦅c, e⦆; s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+
+t{} syntax, the t is not very easy to see, but it's short and it's similar to the q{} for token strings:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!(t{c, f} => {f, [t{c, ""}]}).array.heapify!q{b < a};
+
+    while (heap.length > 1) {
+        auto t{lof, loa} = heap.front;  heap.removeFront;
+        auto t{hif, hia} = heap.front;  heap.removeFront;
+        foreach (t{_, ref e}; loa) e = '0' ~ e;
+        foreach (t{_, ref e}; hia) e = '1' ~ e;
+        heap.insert(t{lof + hif, loa ~ hia});
+    }
+    return heap.front[1].schwartzSort!(t{c, e} => t{e.length, c});
+}
+
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach (t{c, e}; s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+
+<code>#()</code> syntax (suggested by Meta), short, not too much noisy, and it's visually searchable and popping more than t{}:
+
+<syntaxhighlight lang="d">
+import std.stdio, std.algorithm, std.container, std.array;
+ 
+auto encode(T)(Group!("a == b", T[]) sf) {
+    auto heap = sf.map!(#(c, f) => #(f, [#(c, "")])).array.heapify!q{b < a};
+ 
+    while (heap.length > 1) {
+        auto #(lof, loa) = heap.front;  heap.removeFront;
+        auto #(hif, hia) = heap.front;  heap.removeFront;
+        foreach (#(_, ref e); loa) e = '0' ~ e;
+        foreach (#(_, ref e); hia) e = '1' ~ e;
+        heap.insert(#(lof + hif, loa ~ hia));
+    }
+    return heap.front[1].schwartzSort!(#(c, e) => #(e.length, c));
+}
+ 
+void main() {
+    auto s = "this is an example for huffman encoding"d;
+    foreach (#(c, e); s.dup.sort().release.group.encode)
+        writefln("'%s'  %s", c, e);
+}
+</syntaxhighlight>
+
+== Copyright ==
+
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]

@@ -1,0 +1,85 @@
+{| class="wikitable"
+!Title:	
+!'''  Redo toString API'''
+|-
+|DIP:	
+|9
+|-
+|Version:
+|2
+|-
+|Status:
+|Draft
+|-
+|Created:
+|2010-11-18
+|-
+|Last Modified:
+|2010-11-19
+|-
+|Author:
+|Steven Schveighoffer (schveiguy at yahoo dot com)
+|-
+|Links:
+|[http://prowiki.org/wiki4d/wiki.cgi?LanguageDevel/DIPs/DIP9 Original Prowiki Page]
+|}
+
+== Abstract ==
+The current toString method on structs and classes requires creating heap data that will likely be discarded. It also does not provide a means to identify how the object should be formatted. This DIP proposes to replace the toString functionality with a delegate-based writeTo function which uses a delegate sink and a format specifier to allow for custom formatting.
+
+== Rationale ==
+Debug output is a common need when testing code or logging data. Therefore it is natural to provide a means to convert custom aggregates (structs or classes) into human-readable data. However, the current mechanism (toString) requires returning an immutable string. Since the object in question may mutate later, it might not be able to cache the result. This means every time an object is printed, a new heap allocation is required.
+
+In addition, printing an object may require a significant amount of string space (imagine a 10000 element container), which after passed to an output stream will most likely just be discarded. If an aggregate contains data that is also custom aggregates, the only available solution is to use the result of those aggregates' toString concatenated together. This means more wasted heap allocations.
+
+Finally, there is no mechanism to hook the formatting specifiers for format and writef/writefln. This is essential for numeric types such as BigInt and BigFloat which should behave just like a builtin integer or floating point.
+
+== Description ==
+Replace toString on structs and classes with a new function signature:
+<syntaxhighlight lang="d">
+void writeTo(scope void delegate(in char[] data) sink, string format = null) const
+</syntaxhighlight>
+
+'''sink''' is a delegate that can be called in order to write data to an appropriate location (stream, array, etc) with a local buffer. The type of sink's argument is 'in', meaning it will not be changed, and it will not be stored. It is encouraged to use a stack buffer where possible. It's also expected that the sink function will handle any buffering necessary, so there is no need to try and buffer locally.
+
+'''format''' is a string that instructs ''writeTo'' how to format the data. When coming from another function such as ''writefln'', the percent symbol, as well as any arguments that are specific to that function (such as position parameters) will be omitted. Any types that mimic builtin types should support those builtin types' format specifiers. For instance BigInt should support "d" and "x" and associated specifier fields. writefln and similar functions will simply pass the field-specific portion of the specifier to the type, so no added support for conforming specifiers is necessary in those functions to support new custom format specifiers. However, the format specifiers should obey the grammar for format specifiers (see documentation for [http://www.digitalmars.com/d/2.0/phobos/std_format.html#formattedWrite formattedWrite])
+
+The compiler will change its requirement for ''toString'' on structs. Currently, if a struct defines ''toString'', a function pointer to that function is placed in the <code>{TypeInfo Struct}</code> member ''xtoString'' for that struct type. Since ''toString'' is no longer used, it should instead populate a new <code>{TypeInfo Struct}</code> member ''xwriteTo'' function pointer with appropriate signature.
+
+As a path for deprecation, the compiler should populate both ''xtoString'' and ''xwriteTo'' as defined in the struct. The runtime should use ''xwriteTo'' if defined, and ''xtoString'' if not. After an appropriate time period (6 months?) the compiler should print a message when ''toString'' is defined and ''writeTo'' is not. Then after another appropriate time period, the compiler/runtime should stop using ''toString'' and member ''xtoString'' altogether.
+
+Along the same lines, the default ''Object.writeTo'' should simply call ''toString'' and output the result to the sink. After an initial wait period, ''toString'' should be deprecated, and after a transition period, ''toString'' should be removed, and the default ''writeTo'' should perform a similar action that the default ''toString'' does now (print the object type name). Note that a cast will be required in order for the const ''writeTo'' function to call the non-const ''toString''.
+
+In order to facilitate generic programming, use ''formatValue'' and ''formattedWrite'' from std.format. We will ensure that these functions are reentrant.
+
+== Why no templated chars? ==
+You may ask, why can't this solution support multiple types of character widths?
+
+The problem is that templates are not virtual functions, so Object.writeTo cannot be a template. The same goes for the compiler's ability to save the function pointer to a member.
+
+Note that this does not prevent you from making writeTo a template, or from declaring a template that writeTo calls.
+
+== Examples ==
+An example of how ''toString'' and ''writeTo'' may look on a Pair struct:
+<syntaxhighlight lang="d">
+import std.format;
+struct Pair(T, U)
+{
+   T first;
+   U second;
+   string toString()
+   {
+       return format("(%s, %s)", first, second);
+   }
+
+   void writeTo(scope delegate(in char[] data) sink, string format = null) const
+   {
+      formattedWrite(sink, "(%s, %s)", first, second);
+   }
+}
+</syntaxhighlight>
+
+== Copyright ==
+This document has been placed in the Public Domain.
+
+[[Category: DIP]]
